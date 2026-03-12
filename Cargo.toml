@@ -1,10 +1,10 @@
 [package]
 name = "weirwood"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Privacy-preserving XGBoost inference via Fully Homomorphic Encryption"
 license = "MIT"
-repository = "https://github.com/mckinlde/weirwood"
+repository = "https://github.com/matthew-kersting/weirwood"
 documentation = "https://docs.rs/weirwood"
 keywords = ["fhe", "xgboost", "machine-learning", "cryptography", "privacy"]
 categories = ["cryptography", "science"]
