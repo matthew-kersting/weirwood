@@ -10,6 +10,33 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  version-bump:
+    name: Version bump check
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get PR version
+        id: pr
+        run: |
+          echo "version=$(grep '^version' Cargo.toml | head -1 | sed 's/.*= *"\(.*\)"/\1/')" >> "$GITHUB_OUTPUT"
+
+      - name: Get main version
+        id: main
+        run: |
+          git fetch origin main --depth=1
+          echo "version=$(git show origin/main:Cargo.toml | grep '^version' | head -1 | sed 's/.*= *"\(.*\)"/\1/')" >> "$GITHUB_OUTPUT"
+
+      - name: Fail if version unchanged
+        run: |
+          echo "main: ${{ steps.main.outputs.version }}"
+          echo "PR:   ${{ steps.pr.outputs.version }}"
+          if [ "${{ steps.pr.outputs.version }}" = "${{ steps.main.outputs.version }}" ]; then
+            echo "::error::Cargo.toml version (${{ steps.pr.outputs.version }}) must be bumped before merging to main."
+            exit 1
+          fi
+
   test:
     name: Test
     runs-on: ubuntu-latest
