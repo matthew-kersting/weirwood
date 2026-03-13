@@ -107,6 +107,21 @@ impl Ensemble {
         Self::from_raw(raw)
     }
 
+    /// Load from an XGBoost UBJ (Universal Binary JSON) model file.
+    ///
+    /// Save from Python with `booster.save_model("model.ubj")`.
+    pub fn from_ubj_file(path: impl AsRef<Path>) -> Result<Self, Error> {
+        let bytes = std::fs::read(path)?;
+        Self::from_ubj_bytes(&bytes)
+    }
+
+    /// Load from raw UBJ bytes.
+    pub fn from_ubj_bytes(bytes: &[u8]) -> Result<Self, Error> {
+        let value = crate::ubj::parse(bytes)?;
+        let raw: RawModel = serde_json::from_value(value)?;
+        Self::from_raw(raw)
+    }
+
     fn from_raw(raw: RawModel) -> Result<Self, Error> {
         let learner = raw.learner;
 
@@ -116,11 +131,7 @@ impl Ensemble {
             .parse::<usize>()
             .map_err(|_| Error::Format("invalid num_feature".into()))?;
 
-        let base_score = learner
-            .learner_model_param
-            .base_score
-            .parse::<f32>()
-            .map_err(|_| Error::Format("invalid base_score".into()))?;
+        let base_score = parse_base_score(&learner.learner_model_param.base_score)?;
 
         let num_class = learner
             .learner_model_param
@@ -147,6 +158,30 @@ impl Ensemble {
             base_score,
             num_features,
         })
+    }
+}
+
+/// Parse the `base_score` field.
+///
+/// XGBoost >= 1.6 stores `base_score` in **probability space** wrapped in
+/// brackets, e.g. `"[5E-1]"`.  The raw-score contribution for inference is
+/// `logit(p) = ln(p / (1 - p))`.  For the default `p = 0.5` this is exactly
+/// zero, meaning the bias has already been absorbed into the tree leaf weights.
+///
+/// Older versions store a plain float string (e.g. `"0.5"`) that is already
+/// in raw-score (logit) space and is added directly.
+fn parse_base_score(s: &str) -> Result<f32, Error> {
+    let trimmed = s.trim();
+    if trimmed.starts_with('[') && trimmed.ends_with(']') {
+        let prob = trimmed[1..trimmed.len() - 1]
+            .parse::<f32>()
+            .map_err(|_| Error::Format(format!("invalid base_score: {s:?}")))?;
+        // Convert from probability space to logit (raw-score) space.
+        Ok((prob / (1.0 - prob)).ln())
+    } else {
+        trimmed
+            .parse::<f32>()
+            .map_err(|_| Error::Format(format!("invalid base_score: {s:?}")))
     }
 }
 
