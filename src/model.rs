@@ -1,7 +1,7 @@
 //! XGBoost model loading and internal representation.
 //!
-//! Supports XGBoost models saved in JSON format (`model.save("model.json")`).
-//! UBJ (Universal Binary JSON) support is planned for a future release.
+//! Supports XGBoost models saved in JSON (`booster.save_model("model.json")`)
+//! or Universal Binary JSON (`booster.save_model("model.ubj")`) format.
 
 use std::path::Path;
 
