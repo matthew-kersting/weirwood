@@ -1,0 +1,25 @@
+{
+  "learner": {
+    "learner_model_param": {
+      "base_score": "1.0",
+      "num_class": "0",
+      "num_feature": "1"
+    },
+    "objective": {
+      "name": "reg:squarederror"
+    },
+    "gradient_booster": {
+      "model": {
+        "trees": [
+          {
+            "left_children":    [1, -1, -1],
+            "right_children":   [2, -1, -1],
+            "split_conditions": [1.5, 0.0, 0.0],
+            "split_indices":    [0,   0,   0],
+            "base_weights":     [0.0, -0.5, 0.5]
+          }
+        ]
+      }
+    }
+  }
+}
