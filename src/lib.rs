@@ -21,6 +21,7 @@
 pub mod error;
 pub mod eval;
 pub mod model;
+pub(crate) mod ubj;
 
 #[cfg(feature = "tfhe-backend")]
 pub mod fhe;
