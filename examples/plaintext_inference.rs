@@ -17,9 +17,7 @@ fn main() -> Result<(), weirwood::Error> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!(
-            "Usage: plaintext_inference <model.json|model.ubj> [feature1 feature2 ...]"
-        );
+        eprintln!("Usage: plaintext_inference <model.json|model.ubj> [feature1 feature2 ...]");
         std::process::exit(1);
     }
 
@@ -47,12 +45,7 @@ fn main() -> Result<(), weirwood::Error> {
         println!("predict_proba({features:?}) = {score:.6}");
     } else {
         println!("No features supplied — running built-in test vectors:\n");
-        let vectors: &[&[f32]] = &[
-            &[0.0, 0.0],
-            &[0.5, 0.5],
-            &[1.0, 1.0],
-            &[0.7, 0.3],
-        ];
+        let vectors: &[&[f32]] = &[&[0.0, 0.0], &[0.5, 0.5], &[1.0, 1.0], &[0.7, 0.3]];
         for v in vectors {
             let score = PlaintextEvaluator.predict_proba(&ensemble, &v.to_vec());
             println!("  {v:?}  ->  {score:.6}");
