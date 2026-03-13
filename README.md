@@ -30,13 +30,22 @@ weirwood = { version = "0.1", features = ["tfhe-backend"] }
 
 Useful for verifying model loading and as a correctness reference.
 
+`predict_proba` runs inference and applies the appropriate activation for the
+model's objective (sigmoid for `binary:logistic`, identity for
+`reg:squarederror`). Use `predict` (requires importing the `Evaluator` trait)
+if you want the raw pre-activation score instead.
+
 ```rust
-use weirwood::{model::Ensemble, eval::{Evaluator, PlaintextEvaluator}};
+use weirwood::{model::Ensemble, eval::PlaintextEvaluator};
 
 fn main() -> Result<(), weirwood::Error> {
+    // Load from JSON (text) or UBJ (binary) — both produce the same Ensemble.
     let ensemble = Ensemble::from_json_file("model.json")?;
+    // or: let ensemble = Ensemble::from_ubj_file("model.ubj")?;
 
     let features = vec![1.0_f32, 0.5, 3.2, 0.1];
+
+    // Returns probability for binary:logistic, raw score for regression.
     let score = PlaintextEvaluator.predict_proba(&ensemble, &features);
     println!("prediction: {score:.4}");
 
@@ -44,10 +53,19 @@ fn main() -> Result<(), weirwood::Error> {
 }
 ```
 
+To get the raw pre-activation score:
+
+```rust
+use weirwood::{model::Ensemble, eval::{Evaluator, PlaintextEvaluator}};
+
+let raw = PlaintextEvaluator.predict(&ensemble, &features);
+```
+
 Save the model from Python with:
 
 ```python
-booster.save_model("model.json")
+booster.save_model("model.json")   # JSON (text)
+booster.save_model("model.ubj")    # UBJ (binary, smaller on disk)
 ```
 
 ### Encrypted inference (in progress)
@@ -79,7 +97,7 @@ src/
 | Format | Status |
 |--------|--------|
 | XGBoost JSON (`.json`) | Supported |
-| Universal Binary JSON (`.ubj`) | Planned |
+| Universal Binary JSON (`.ubj`) | Supported |
 
 ## Supported objectives
 
@@ -101,6 +119,21 @@ cargo build --features tfhe-backend
 # run tests
 cargo test
 ```
+
+## Benchmarks
+
+Plaintext inference throughput measured on the committed `trained_binary.ubj`
+fixture (100 trees, depth 3, 2 features), 100,000 iterations each.
+Run `./benchmarks/run_benchmark.sh` to regenerate on your machine.
+
+<!-- BENCHMARK_TABLE_START -->
+_Last run: 2026-03-13 · model: `tests/fixtures/trained_binary.ubj` · 100,000 iterations_
+
+| Backend                    | Total (ms)   | Per call (ns) | Throughput (inf/sec) |
+|----------------------------|-------------|---------------|---------------------|
+| weirwood (Rust, plaintext) |       0.666 |           6.7 |           150059123 |
+| XGBoost (Python)  |    6472.018 |       64720.2 |               15451 |
+<!-- BENCHMARK_TABLE_END -->
 
 ## Performance notes
 

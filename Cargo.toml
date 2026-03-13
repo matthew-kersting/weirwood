@@ -1,6 +1,6 @@
 [package]
 name = "weirwood"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Privacy-preserving XGBoost inference via Fully Homomorphic Encryption"
 license = "MIT"
@@ -9,7 +9,7 @@ documentation = "https://docs.rs/weirwood"
 keywords = ["fhe", "xgboost", "machine-learning", "cryptography", "privacy"]
 categories = ["cryptography", "science"]
 readme = "README.md"
-exclude = ["weirwood_1pager.md"]
+exclude = ["weirwood_1pager.md", "benchmarks/"]
 
 [features]
 default = []
