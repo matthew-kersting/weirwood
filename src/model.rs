@@ -34,7 +34,7 @@ impl Node {
     }
 }
 
-/// A single regression tree in the ensemble.
+/// A single regression tree in the boosted ensemble.
 #[derive(Debug, Clone)]
 pub struct Tree {
     pub nodes: Vec<Node>,
@@ -43,23 +43,23 @@ pub struct Tree {
 impl Tree {
     /// Walk the tree for a plaintext feature vector and return the leaf value.
     pub fn evaluate(&self, features: &[f32]) -> f32 {
-        let mut idx = 0usize;
+        let mut current_node_index: usize = 0;
         loop {
-            let node = &self.nodes[idx];
-            if node.is_leaf() {
-                return node.leaf_value;
+            let current_node: &Node = &self.nodes[current_node_index];
+            if current_node.is_leaf() {
+                return current_node.leaf_value;
             }
-            let feature_val = features[node.split_feature as usize];
-            idx = if feature_val <= node.split_threshold {
-                node.left_child as usize
+            let feature_value: f32 = features[current_node.split_feature as usize];
+            current_node_index = if feature_value <= current_node.split_threshold {
+                current_node.left_child as usize
             } else {
-                node.right_child as usize
+                current_node.right_child as usize
             };
         }
     }
 }
 
-/// The prediction task the ensemble was trained for.
+/// The prediction task the model was trained for.
 #[derive(Debug, Clone)]
 pub enum Objective {
     BinaryLogistic,
@@ -72,8 +72,8 @@ pub enum Objective {
 }
 
 impl Objective {
-    fn from_str(s: &str, num_class: usize) -> Self {
-        match s {
+    fn from_str(objective_name: &str, num_class: usize) -> Self {
+        match objective_name {
             "binary:logistic" => Self::BinaryLogistic,
             "reg:squarederror" | "reg:linear" => Self::RegSquaredError,
             "multi:softmax" | "multi:softprob" => Self::MultiSoftmax { num_class },
@@ -82,9 +82,9 @@ impl Objective {
     }
 }
 
-/// The full boosted tree ensemble, ready for inference.
+/// A fully loaded XGBoost boosted tree ensemble, ready for inference.
 #[derive(Debug, Clone)]
-pub struct Ensemble {
+pub struct WeirwoodTree {
     pub trees: Vec<Tree>,
     pub objective: Objective,
     /// Global bias added before the activation function.
@@ -92,67 +92,67 @@ pub struct Ensemble {
     pub num_features: usize,
 }
 
-impl Ensemble {
+impl WeirwoodTree {
     /// Load from an XGBoost JSON model file.
     ///
     /// Save from Python with `booster.save_model("model.json")`.
     pub fn from_json_file(path: impl AsRef<Path>) -> Result<Self, Error> {
-        let bytes = std::fs::read(path)?;
+        let bytes: Vec<u8> = std::fs::read(path)?;
         Self::from_json_bytes(&bytes)
     }
 
     /// Load from raw JSON bytes.
     pub fn from_json_bytes(bytes: &[u8]) -> Result<Self, Error> {
-        let raw: RawModel = serde_json::from_slice(bytes)?;
-        Self::from_raw(raw)
+        let raw_model: RawModel = serde_json::from_slice(bytes)?;
+        Self::from_raw(raw_model)
     }
 
     /// Load from an XGBoost UBJ (Universal Binary JSON) model file.
     ///
     /// Save from Python with `booster.save_model("model.ubj")`.
     pub fn from_ubj_file(path: impl AsRef<Path>) -> Result<Self, Error> {
-        let bytes = std::fs::read(path)?;
+        let bytes: Vec<u8> = std::fs::read(path)?;
         Self::from_ubj_bytes(&bytes)
     }
 
     /// Load from raw UBJ bytes.
     pub fn from_ubj_bytes(bytes: &[u8]) -> Result<Self, Error> {
-        let value = crate::ubj::parse(bytes)?;
-        let raw: RawModel = serde_json::from_value(value)?;
-        Self::from_raw(raw)
+        let json_value: serde_json::Value = crate::ubj::parse(bytes)?;
+        let raw_model: RawModel = serde_json::from_value(json_value)?;
+        Self::from_raw(raw_model)
     }
 
-    fn from_raw(raw: RawModel) -> Result<Self, Error> {
-        let learner = raw.learner;
+    fn from_raw(raw_model: RawModel) -> Result<Self, Error> {
+        let learner: RawLearner = raw_model.learner;
 
-        let num_features = learner
+        let num_features: usize = learner
             .learner_model_param
             .num_feature
             .parse::<usize>()
             .map_err(|_| Error::Format("invalid num_feature".into()))?;
 
-        let base_score = parse_base_score(&learner.learner_model_param.base_score)?;
+        let base_score: f32 = parse_base_score(&learner.learner_model_param.base_score)?;
 
-        let num_class = learner
+        let num_class: usize = learner
             .learner_model_param
             .num_class
             .parse::<usize>()
             .unwrap_or(0);
 
-        let objective = Objective::from_str(&learner.objective.name, num_class);
+        let objective: Objective = Objective::from_str(&learner.objective.name, num_class);
 
-        let raw_trees = learner
+        let serialized_trees: Vec<RawTree> = learner
             .gradient_booster
             .model
             .trees
             .ok_or_else(|| Error::Format("missing trees array".into()))?;
 
-        let trees = raw_trees
+        let trees: Vec<Tree> = serialized_trees
             .into_iter()
             .map(tree_from_raw)
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(Ensemble {
+        Ok(WeirwoodTree {
             trees,
             objective,
             base_score,
@@ -170,40 +170,40 @@ impl Ensemble {
 ///
 /// Older versions store a plain float string (e.g. `"0.5"`) that is already
 /// in raw-score (logit) space and is added directly.
-fn parse_base_score(s: &str) -> Result<f32, Error> {
-    let trimmed = s.trim();
-    if trimmed.starts_with('[') && trimmed.ends_with(']') {
-        let prob = trimmed[1..trimmed.len() - 1]
+fn parse_base_score(raw_base_score: &str) -> Result<f32, Error> {
+    let trimmed_score: &str = raw_base_score.trim();
+    if trimmed_score.starts_with('[') && trimmed_score.ends_with(']') {
+        let base_probability: f32 = trimmed_score[1..trimmed_score.len() - 1]
             .parse::<f32>()
-            .map_err(|_| Error::Format(format!("invalid base_score: {s:?}")))?;
+            .map_err(|_| Error::Format(format!("invalid base_score: {raw_base_score:?}")))?;
         // Convert from probability space to logit (raw-score) space.
-        Ok((prob / (1.0 - prob)).ln())
+        Ok((base_probability / (1.0 - base_probability)).ln())
     } else {
-        trimmed
+        trimmed_score
             .parse::<f32>()
-            .map_err(|_| Error::Format(format!("invalid base_score: {s:?}")))
+            .map_err(|_| Error::Format(format!("invalid base_score: {raw_base_score:?}")))
     }
 }
 
-fn tree_from_raw(raw: RawTree) -> Result<Tree, Error> {
-    let n = raw.left_children.len();
-    if raw.right_children.len() != n
-        || raw.split_conditions.len() != n
-        || raw.split_indices.len() != n
-        || raw.base_weights.len() != n
+fn tree_from_raw(raw_tree: RawTree) -> Result<Tree, Error> {
+    let node_count: usize = raw_tree.left_children.len();
+    if raw_tree.right_children.len() != node_count
+        || raw_tree.split_conditions.len() != node_count
+        || raw_tree.split_indices.len() != node_count
+        || raw_tree.base_weights.len() != node_count
     {
         return Err(Error::Format(
             "tree arrays have inconsistent lengths".into(),
         ));
     }
 
-    let nodes = (0..n)
-        .map(|i| Node {
-            split_feature: raw.split_indices[i],
-            split_threshold: raw.split_conditions[i],
-            left_child: raw.left_children[i],
-            right_child: raw.right_children[i],
-            leaf_value: raw.base_weights[i],
+    let nodes: Vec<Node> = (0..node_count)
+        .map(|node_index| Node {
+            split_feature: raw_tree.split_indices[node_index],
+            split_threshold: raw_tree.split_conditions[node_index],
+            left_child: raw_tree.left_children[node_index],
+            right_child: raw_tree.right_children[node_index],
+            leaf_value: raw_tree.base_weights[node_index],
         })
         .collect();
 

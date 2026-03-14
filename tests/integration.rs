@@ -8,16 +8,17 @@
 
 use weirwood::{
     eval::{Evaluator, PlaintextEvaluator},
-    model::Ensemble,
+    model::WeirwoodTree,
 };
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn load_json(name: &str) -> Ensemble {
-    let path = format!("tests/fixtures/{name}");
-    Ensemble::from_json_file(&path).unwrap_or_else(|e| panic!("failed to load {path}: {e}"))
+fn load_fixture_json(fixture_name: &str) -> WeirwoodTree {
+    let fixture_path: String = format!("tests/fixtures/{fixture_name}");
+    WeirwoodTree::from_json_file(&fixture_path)
+        .unwrap_or_else(|error| panic!("failed to load {fixture_path}: {error}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -26,45 +27,47 @@ fn load_json(name: &str) -> Ensemble {
 
 #[test]
 fn two_trees_binary_loads_correctly() {
-    let e = load_json("two_trees_binary.json");
-    assert_eq!(e.num_features, 2);
-    assert_eq!(e.trees.len(), 2);
-    assert_eq!(e.base_score, 0.0);
+    let loaded_tree: WeirwoodTree = load_fixture_json("two_trees_binary.json");
+    assert_eq!(loaded_tree.num_features, 2);
+    assert_eq!(loaded_tree.trees.len(), 2);
+    assert_eq!(loaded_tree.base_score, 0.0);
 }
 
 #[test]
 fn stump_regression_loads_correctly() {
-    let e = load_json("stump_regression.json");
-    assert_eq!(e.num_features, 1);
-    assert_eq!(e.trees.len(), 1);
-    approx::assert_abs_diff_eq!(e.base_score, 1.0, epsilon = 1e-6);
+    let loaded_tree: WeirwoodTree = load_fixture_json("stump_regression.json");
+    assert_eq!(loaded_tree.num_features, 1);
+    assert_eq!(loaded_tree.trees.len(), 1);
+    approx::assert_abs_diff_eq!(loaded_tree.base_score, 1.0, epsilon = 1e-6);
 }
 
 #[test]
 fn missing_file_returns_io_error() {
-    let result = Ensemble::from_json_file("tests/fixtures/does_not_exist.json");
+    let result: Result<WeirwoodTree, weirwood::Error> =
+        WeirwoodTree::from_json_file("tests/fixtures/does_not_exist.json");
     assert!(matches!(result, Err(weirwood::Error::Io(_))));
 }
 
 #[test]
 fn invalid_json_returns_parse_error() {
-    let result = Ensemble::from_json_bytes(b"not json at all {{{");
+    let result: Result<WeirwoodTree, weirwood::Error> =
+        WeirwoodTree::from_json_bytes(b"not json at all {{{");
     assert!(matches!(result, Err(weirwood::Error::Json(_))));
 }
 
 #[test]
 fn empty_trees_array_is_valid() {
     // A model with zero trees is odd but structurally legal.
-    let json = r#"{
+    let json: &str = r#"{
         "learner": {
             "learner_model_param": { "base_score": "2.5", "num_class": "0", "num_feature": "3" },
             "objective": { "name": "reg:squarederror" },
             "gradient_booster": { "model": { "trees": [] } }
         }
     }"#;
-    let e = Ensemble::from_json_bytes(json.as_bytes()).unwrap();
-    assert_eq!(e.trees.len(), 0);
-    approx::assert_abs_diff_eq!(e.base_score, 2.5, epsilon = 1e-5);
+    let loaded_tree: WeirwoodTree = WeirwoodTree::from_json_bytes(json.as_bytes()).unwrap();
+    assert_eq!(loaded_tree.trees.len(), 0);
+    approx::assert_abs_diff_eq!(loaded_tree.base_score, 2.5, epsilon = 1e-5);
 }
 
 // ---------------------------------------------------------------------------
@@ -84,52 +87,76 @@ fn empty_trees_array_is_valid() {
 
 #[test]
 fn two_trees_raw_scores() {
-    let e = load_json("two_trees_binary.json");
-    let eval = PlaintextEvaluator;
+    let loaded_tree: WeirwoodTree = load_fixture_json("two_trees_binary.json");
+    let evaluator: PlaintextEvaluator = PlaintextEvaluator;
 
-    approx::assert_abs_diff_eq!(eval.predict(&e, &vec![0.0, 0.0]), -0.5, epsilon = 1e-6);
-    approx::assert_abs_diff_eq!(eval.predict(&e, &vec![2.0, 3.0]), 0.5, epsilon = 1e-6);
-    approx::assert_abs_diff_eq!(eval.predict(&e, &vec![0.0, 3.0]), -0.1, epsilon = 1e-6);
-    approx::assert_abs_diff_eq!(eval.predict(&e, &vec![2.0, 0.0]), 0.1, epsilon = 1e-6);
+    approx::assert_abs_diff_eq!(
+        evaluator.predict(&loaded_tree, &vec![0.0, 0.0]),
+        -0.5,
+        epsilon = 1e-6
+    );
+    approx::assert_abs_diff_eq!(
+        evaluator.predict(&loaded_tree, &vec![2.0, 3.0]),
+        0.5,
+        epsilon = 1e-6
+    );
+    approx::assert_abs_diff_eq!(
+        evaluator.predict(&loaded_tree, &vec![0.0, 3.0]),
+        -0.1,
+        epsilon = 1e-6
+    );
+    approx::assert_abs_diff_eq!(
+        evaluator.predict(&loaded_tree, &vec![2.0, 0.0]),
+        0.1,
+        epsilon = 1e-6
+    );
 }
 
 #[test]
 fn two_trees_boundary_conditions() {
-    let e = load_json("two_trees_binary.json");
-    let eval = PlaintextEvaluator;
+    let loaded_tree: WeirwoodTree = load_fixture_json("two_trees_binary.json");
+    let evaluator: PlaintextEvaluator = PlaintextEvaluator;
 
     // Both features exactly at threshold → both go left
-    approx::assert_abs_diff_eq!(eval.predict(&e, &vec![1.5, 2.0]), -0.5, epsilon = 1e-6);
+    approx::assert_abs_diff_eq!(
+        evaluator.predict(&loaded_tree, &vec![1.5, 2.0]),
+        -0.5,
+        epsilon = 1e-6
+    );
     // Just above both thresholds → both go right
-    approx::assert_abs_diff_eq!(eval.predict(&e, &vec![1.501, 2.001]), 0.5, epsilon = 1e-5);
+    approx::assert_abs_diff_eq!(
+        evaluator.predict(&loaded_tree, &vec![1.501, 2.001]),
+        0.5,
+        epsilon = 1e-5
+    );
 }
 
 #[test]
 fn two_trees_predict_proba() {
-    let e = load_json("two_trees_binary.json");
-    let eval = PlaintextEvaluator;
+    let loaded_tree: WeirwoodTree = load_fixture_json("two_trees_binary.json");
+    let evaluator: PlaintextEvaluator = PlaintextEvaluator;
 
     // sigmoid(-0.5) = 1 / (1 + e^0.5) ≈ 0.37754066
     approx::assert_abs_diff_eq!(
-        eval.predict_proba(&e, &vec![0.0, 0.0]),
+        evaluator.predict_proba(&loaded_tree, &vec![0.0, 0.0]),
         0.37754066_f32,
         epsilon = 1e-5
     );
     // sigmoid(0.5) ≈ 0.62245934
     approx::assert_abs_diff_eq!(
-        eval.predict_proba(&e, &vec![2.0, 3.0]),
+        evaluator.predict_proba(&loaded_tree, &vec![2.0, 3.0]),
         0.62245934_f32,
         epsilon = 1e-5
     );
     // sigmoid(-0.1) ≈ 0.47502081
     approx::assert_abs_diff_eq!(
-        eval.predict_proba(&e, &vec![0.0, 3.0]),
+        evaluator.predict_proba(&loaded_tree, &vec![0.0, 3.0]),
         0.47502081_f32,
         epsilon = 1e-5
     );
     // sigmoid(0.1) ≈ 0.52497919
     approx::assert_abs_diff_eq!(
-        eval.predict_proba(&e, &vec![2.0, 0.0]),
+        evaluator.predict_proba(&loaded_tree, &vec![2.0, 0.0]),
         0.52497919_f32,
         epsilon = 1e-5
     );
@@ -150,24 +177,40 @@ fn two_trees_predict_proba() {
 
 #[test]
 fn regression_raw_scores() {
-    let e = load_json("stump_regression.json");
-    let eval = PlaintextEvaluator;
+    let loaded_tree: WeirwoodTree = load_fixture_json("stump_regression.json");
+    let evaluator: PlaintextEvaluator = PlaintextEvaluator;
 
-    approx::assert_abs_diff_eq!(eval.predict(&e, &vec![0.0]), 0.5, epsilon = 1e-6);
-    approx::assert_abs_diff_eq!(eval.predict(&e, &vec![2.0]), 1.5, epsilon = 1e-6);
-    approx::assert_abs_diff_eq!(eval.predict(&e, &vec![1.5]), 0.5, epsilon = 1e-6); // boundary → left
-    approx::assert_abs_diff_eq!(eval.predict(&e, &vec![1.6]), 1.5, epsilon = 1e-6);
+    approx::assert_abs_diff_eq!(
+        evaluator.predict(&loaded_tree, &vec![0.0]),
+        0.5,
+        epsilon = 1e-6
+    );
+    approx::assert_abs_diff_eq!(
+        evaluator.predict(&loaded_tree, &vec![2.0]),
+        1.5,
+        epsilon = 1e-6
+    );
+    approx::assert_abs_diff_eq!(
+        evaluator.predict(&loaded_tree, &vec![1.5]),
+        0.5,
+        epsilon = 1e-6
+    ); // boundary → left
+    approx::assert_abs_diff_eq!(
+        evaluator.predict(&loaded_tree, &vec![1.6]),
+        1.5,
+        epsilon = 1e-6
+    );
 }
 
 #[test]
 fn regression_predict_proba_is_identity() {
-    let e = load_json("stump_regression.json");
-    let eval = PlaintextEvaluator;
+    let loaded_tree: WeirwoodTree = load_fixture_json("stump_regression.json");
+    let evaluator: PlaintextEvaluator = PlaintextEvaluator;
 
     // For regression the activation is identity, so predict == predict_proba.
-    let raw = eval.predict(&e, &vec![2.0]);
-    let proba = eval.predict_proba(&e, &vec![2.0]);
-    approx::assert_abs_diff_eq!(raw, proba, epsilon = 1e-9);
+    let raw_score: f32 = evaluator.predict(&loaded_tree, &vec![2.0]);
+    let predicted_proba: f32 = evaluator.predict_proba(&loaded_tree, &vec![2.0]);
+    approx::assert_abs_diff_eq!(raw_score, predicted_proba, epsilon = 1e-9);
 }
 
 // ---------------------------------------------------------------------------
@@ -203,39 +246,47 @@ const TRAINED_EXPECTED_PROBA: &[f32] = &[
 
 #[test]
 fn trained_json_matches_expected_outputs() {
-    let model = load_json("trained_binary.json");
-    let eval = PlaintextEvaluator;
-    for (features, &exp) in TRAINED_TEST_VECTORS.iter().zip(TRAINED_EXPECTED_PROBA) {
-        let pred = eval.predict_proba(&model, &features.to_vec());
-        approx::assert_abs_diff_eq!(pred, exp, epsilon = 1e-5);
+    let loaded_tree: WeirwoodTree = load_fixture_json("trained_binary.json");
+    let evaluator: PlaintextEvaluator = PlaintextEvaluator;
+    for (features, &expected_proba) in TRAINED_TEST_VECTORS.iter().zip(TRAINED_EXPECTED_PROBA) {
+        let predicted_proba: f32 = evaluator.predict_proba(&loaded_tree, &features.to_vec());
+        approx::assert_abs_diff_eq!(predicted_proba, expected_proba, epsilon = 1e-5);
     }
 }
 
 #[test]
 fn trained_ubj_matches_expected_outputs() {
-    let model = Ensemble::from_ubj_file("tests/fixtures/trained_binary.ubj")
-        .expect("load trained_binary.ubj");
-    let eval = PlaintextEvaluator;
-    for (features, &exp) in TRAINED_TEST_VECTORS.iter().zip(TRAINED_EXPECTED_PROBA) {
-        let pred = eval.predict_proba(&model, &features.to_vec());
-        approx::assert_abs_diff_eq!(pred, exp, epsilon = 1e-5);
+    let loaded_tree: WeirwoodTree =
+        WeirwoodTree::from_ubj_file("tests/fixtures/trained_binary.ubj")
+            .expect("load trained_binary.ubj");
+    let evaluator: PlaintextEvaluator = PlaintextEvaluator;
+    for (features, &expected_proba) in TRAINED_TEST_VECTORS.iter().zip(TRAINED_EXPECTED_PROBA) {
+        let predicted_proba: f32 = evaluator.predict_proba(&loaded_tree, &features.to_vec());
+        approx::assert_abs_diff_eq!(predicted_proba, expected_proba, epsilon = 1e-5);
     }
 }
 
 #[test]
 fn ubj_and_json_loaders_produce_identical_predictions() {
-    let json_model = load_json("trained_binary.json");
-    let ubj_model = Ensemble::from_ubj_file("tests/fixtures/trained_binary.ubj")
-        .expect("load trained_binary.ubj");
+    let json_loaded_tree: WeirwoodTree = load_fixture_json("trained_binary.json");
+    let ubj_loaded_tree: WeirwoodTree =
+        WeirwoodTree::from_ubj_file("tests/fixtures/trained_binary.ubj")
+            .expect("load trained_binary.ubj");
 
-    assert_eq!(json_model.num_features, ubj_model.num_features);
-    assert_eq!(json_model.trees.len(), ubj_model.trees.len());
-    approx::assert_abs_diff_eq!(json_model.base_score, ubj_model.base_score, epsilon = 1e-6);
+    assert_eq!(json_loaded_tree.num_features, ubj_loaded_tree.num_features);
+    assert_eq!(json_loaded_tree.trees.len(), ubj_loaded_tree.trees.len());
+    approx::assert_abs_diff_eq!(
+        json_loaded_tree.base_score,
+        ubj_loaded_tree.base_score,
+        epsilon = 1e-6
+    );
 
-    let eval = PlaintextEvaluator;
+    let evaluator: PlaintextEvaluator = PlaintextEvaluator;
     for features in TRAINED_TEST_VECTORS {
-        let pred_json = eval.predict_proba(&json_model, &features.to_vec());
-        let pred_ubj = eval.predict_proba(&ubj_model, &features.to_vec());
-        approx::assert_abs_diff_eq!(pred_json, pred_ubj, epsilon = 1e-6);
+        let json_predicted_proba: f32 =
+            evaluator.predict_proba(&json_loaded_tree, &features.to_vec());
+        let ubj_predicted_proba: f32 =
+            evaluator.predict_proba(&ubj_loaded_tree, &features.to_vec());
+        approx::assert_abs_diff_eq!(json_predicted_proba, ubj_predicted_proba, epsilon = 1e-6);
     }
 }
