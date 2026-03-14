@@ -11,11 +11,6 @@ categories = ["cryptography", "science"]
 readme = "README.md"
 exclude = ["weirwood_1pager.md", "benchmarks/"]
 
-[features]
-default = []
-# Enable the TFHE-rs backend for encrypted inference
-tfhe-backend = ["dep:tfhe"]
-
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -23,8 +18,7 @@ thiserror = "2"
 
 [dependencies.tfhe]
 version = "0.10"
-features = ["shortint", "integer"]
-optional = true
+features = ["shortint", "integer", "seeder_unix"]
 
 [dev-dependencies]
 approx = "0.5"
