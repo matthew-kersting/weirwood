@@ -34,7 +34,7 @@
 use tfhe::prelude::*;
 use tfhe::{ConfigBuilder, FheInt16, FheInt32, ServerKey, generate_keys, set_server_key};
 
-use crate::{Error, eval::Evaluator, model::Ensemble};
+use crate::{Error, eval::Evaluator, model::WeirwoodTree};
 
 // ---------------------------------------------------------------------------
 // Constants and type aliases
@@ -164,7 +164,11 @@ impl Evaluator for FheEvaluator {
     type Input = EncryptedInput;
     type Output = EncryptedScore;
 
-    fn predict(&self, _ensemble: &Ensemble, _input: &EncryptedInput) -> EncryptedScore {
+    fn predict(
+        &self,
+        _weirwood_tree: &WeirwoodTree,
+        _encrypted_features: &EncryptedInput,
+    ) -> EncryptedScore {
         todo!("FHE inference circuit not yet implemented")
     }
 }

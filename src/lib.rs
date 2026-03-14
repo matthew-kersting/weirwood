@@ -6,11 +6,11 @@
 //! # Quickstart
 //!
 //! ```no_run
-//! use weirwood::{model::Ensemble, eval::PlaintextEvaluator, eval::Evaluator};
+//! use weirwood::{model::WeirwoodTree, eval::{Evaluator, PlaintextEvaluator}};
 //!
-//! let ensemble = Ensemble::from_json_file("model.json")?;
+//! let weirwood_tree = WeirwoodTree::from_json_file("model.json")?;
 //! let features = vec![1.0_f32, 0.5, 3.2, 0.1];
-//! let score = PlaintextEvaluator.predict(&ensemble, &features);
+//! let score = PlaintextEvaluator.predict(&weirwood_tree, &features);
 //! # Ok::<(), weirwood::Error>(())
 //! ```
 

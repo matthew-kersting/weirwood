@@ -33,17 +33,17 @@ model's objective (sigmoid for `binary:logistic`, identity for
 if you want the raw pre-activation score instead.
 
 ```rust
-use weirwood::{model::Ensemble, eval::PlaintextEvaluator};
+use weirwood::{model::WeirwoodTree, eval::PlaintextEvaluator};
 
 fn main() -> Result<(), weirwood::Error> {
-    // Load from JSON (text) or UBJ (binary) — both produce the same Ensemble.
-    let ensemble = Ensemble::from_json_file("model.json")?;
-    // or: let ensemble = Ensemble::from_ubj_file("model.ubj")?;
+    // Load from JSON (text) or UBJ (binary) — both produce the same WeirwoodTree.
+    let weirwood_tree = WeirwoodTree::from_json_file("model.json")?;
+    // or: let weirwood_tree = WeirwoodTree::from_ubj_file("model.ubj")?;
 
     let features = vec![1.0_f32, 0.5, 3.2, 0.1];
 
     // Returns probability for binary:logistic, raw score for regression.
-    let score = PlaintextEvaluator.predict_proba(&ensemble, &features);
+    let score = PlaintextEvaluator.predict_proba(&weirwood_tree, &features);
     println!("prediction: {score:.4}");
 
     Ok(())
@@ -53,9 +53,9 @@ fn main() -> Result<(), weirwood::Error> {
 To get the raw pre-activation score:
 
 ```rust
-use weirwood::{model::Ensemble, eval::{Evaluator, PlaintextEvaluator}};
+use weirwood::{model::WeirwoodTree, eval::{Evaluator, PlaintextEvaluator}};
 
-let raw = PlaintextEvaluator.predict(&ensemble, &features);
+let raw_score = PlaintextEvaluator.predict(&weirwood_tree, &features);
 ```
 
 Save the model from Python with:
@@ -92,7 +92,7 @@ let ciphertext = ctx.encrypt(&features);
 src/
   lib.rs       public API and re-exports
   error.rs     WeirwoodError enum
-  model.rs     XGBoost IR types (Ensemble, Tree, Node) + JSON loader
+  model.rs     XGBoost IR types (WeirwoodTree, Tree, Node) + JSON loader
   eval.rs      Evaluator trait + PlaintextEvaluator
   fhe.rs       FheContext (key gen, encrypt, decrypt) + FheEvaluator stub
 ```
