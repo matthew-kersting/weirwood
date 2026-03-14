@@ -21,8 +21,8 @@ fn main() -> Result<(), weirwood::Error> {
         std::process::exit(1);
     }
 
-    let model_path = &args[1];
-    let ensemble = if model_path.ends_with(".ubj") {
+    let model_path: &String = &args[1];
+    let ensemble: Ensemble = if model_path.ends_with(".ubj") {
         Ensemble::from_ubj_file(model_path)?
     } else {
         Ensemble::from_json_file(model_path)?
@@ -41,13 +41,13 @@ fn main() -> Result<(), weirwood::Error> {
             .map(|s| s.parse::<f32>().expect("feature must be a float"))
             .collect();
 
-        let score = PlaintextEvaluator.predict_proba(&ensemble, &features);
+        let score: f32 = PlaintextEvaluator.predict_proba(&ensemble, &features);
         println!("predict_proba({features:?}) = {score:.6}");
     } else {
         println!("No features supplied — running built-in test vectors:\n");
         let vectors: &[&[f32]] = &[&[0.0, 0.0], &[0.5, 0.5], &[1.0, 1.0], &[0.7, 0.3]];
         for v in vectors {
-            let score = PlaintextEvaluator.predict_proba(&ensemble, &v.to_vec());
+            let score: f32 = PlaintextEvaluator.predict_proba(&ensemble, &v.to_vec());
             println!("  {v:?}  ->  {score:.6}");
         }
     }

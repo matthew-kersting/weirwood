@@ -30,12 +30,12 @@ fn main() -> Result<(), weirwood::Error> {
 
     // Warm up instruction / branch-predictor caches.
     for _ in 0..WARMUP {
-        std::hint::black_box(eval.predict_proba(&ensemble, &features));
+        eval.predict_proba(&ensemble, &features);
     }
 
     let start = Instant::now();
     for _ in 0..ITERATIONS {
-        std::hint::black_box(eval.predict_proba(&ensemble, &features));
+        eval.predict_proba(&ensemble, &features);
     }
     let elapsed = start.elapsed();
 

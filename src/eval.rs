@@ -3,8 +3,7 @@
 //! [`PlaintextEvaluator`] runs standard floating-point inference and is useful
 //! for verifying model loading and as a correctness reference for the FHE path.
 //!
-//! The FHE evaluator lives in the [`crate::fhe`] module behind the
-//! `tfhe-backend` feature flag.
+//! The FHE evaluator lives in the [`crate::fhe`] module.
 
 use crate::model::{Ensemble, Objective};
 
@@ -68,7 +67,7 @@ mod tests {
 
     /// Single stump: feature[0] <= 1.0 → left (-0.5), else right (0.5).
     fn tiny_ensemble() -> Ensemble {
-        let nodes = vec![
+        let nodes: Vec<Node> = vec![
             Node {
                 split_feature: 0,
                 split_threshold: 1.0,
@@ -106,7 +105,7 @@ mod tests {
     ///   Node 3: leaf = -1.0
     ///   Node 4: leaf = 0.5
     fn deep_ensemble() -> Ensemble {
-        let nodes = vec![
+        let nodes: Vec<Node> = vec![
             Node {
                 split_feature: 0,
                 split_threshold: 5.0,
@@ -157,15 +156,15 @@ mod tests {
 
     #[test]
     fn plaintext_left_branch() {
-        let e = tiny_ensemble();
-        let score = PlaintextEvaluator.predict(&e, &vec![0.5]);
+        let e: Ensemble = tiny_ensemble();
+        let score: f32 = PlaintextEvaluator.predict(&e, &vec![0.5]);
         approx::assert_abs_diff_eq!(score, -0.5, epsilon = 1e-6);
     }
 
     #[test]
     fn plaintext_right_branch() {
-        let e = tiny_ensemble();
-        let score = PlaintextEvaluator.predict(&e, &vec![2.0]);
+        let e: Ensemble = tiny_ensemble();
+        let score: f32 = PlaintextEvaluator.predict(&e, &vec![2.0]);
         approx::assert_abs_diff_eq!(score, 0.5, epsilon = 1e-6);
     }
 
@@ -173,15 +172,15 @@ mod tests {
     /// (the split condition is `feature <= threshold`).
     #[test]
     fn boundary_at_threshold_goes_left() {
-        let e = tiny_ensemble();
-        let score = PlaintextEvaluator.predict(&e, &vec![1.0]);
+        let e: Ensemble = tiny_ensemble();
+        let score: f32 = PlaintextEvaluator.predict(&e, &vec![1.0]);
         approx::assert_abs_diff_eq!(score, -0.5, epsilon = 1e-6);
     }
 
     #[test]
     fn just_above_threshold_goes_right() {
-        let e = tiny_ensemble();
-        let score = PlaintextEvaluator.predict(&e, &vec![1.0001]);
+        let e: Ensemble = tiny_ensemble();
+        let score: f32 = PlaintextEvaluator.predict(&e, &vec![1.0001]);
         approx::assert_abs_diff_eq!(score, 0.5, epsilon = 1e-6);
     }
 
@@ -192,31 +191,31 @@ mod tests {
     #[test]
     fn depth2_left_left() {
         // feature[0]=1.0 (<=5→left), feature[1]=1.0 (<=2→left) → leaf -1.0
-        let e = deep_ensemble();
-        let score = PlaintextEvaluator.predict(&e, &vec![1.0, 1.0]);
+        let e: Ensemble = deep_ensemble();
+        let score: f32 = PlaintextEvaluator.predict(&e, &vec![1.0, 1.0]);
         approx::assert_abs_diff_eq!(score, -1.0, epsilon = 1e-6);
     }
 
     #[test]
     fn depth2_left_right() {
         // feature[0]=1.0 (<=5→left), feature[1]=3.0 (>2→right) → leaf 0.5
-        let e = deep_ensemble();
-        let score = PlaintextEvaluator.predict(&e, &vec![1.0, 3.0]);
+        let e: Ensemble = deep_ensemble();
+        let score: f32 = PlaintextEvaluator.predict(&e, &vec![1.0, 3.0]);
         approx::assert_abs_diff_eq!(score, 0.5, epsilon = 1e-6);
     }
 
     #[test]
     fn depth2_right() {
         // feature[0]=6.0 (>5→right) → leaf 1.0 (never looks at feature[1])
-        let e = deep_ensemble();
-        let score = PlaintextEvaluator.predict(&e, &vec![6.0, 99.0]);
+        let e: Ensemble = deep_ensemble();
+        let score: f32 = PlaintextEvaluator.predict(&e, &vec![6.0, 99.0]);
         approx::assert_abs_diff_eq!(score, 1.0, epsilon = 1e-6);
     }
 
     /// Tree uses feature[1], not feature[0] — verifies split_feature indexing.
     #[test]
     fn correct_feature_index_used() {
-        let nodes = vec![
+        let nodes: Vec<Node> = vec![
             Node {
                 split_feature: 1,
                 split_threshold: 0.5,
@@ -239,15 +238,15 @@ mod tests {
                 leaf_value: 1.0,
             },
         ];
-        let e = Ensemble {
+        let e: Ensemble = Ensemble {
             trees: vec![Tree { nodes }],
             objective: Objective::BinaryLogistic,
             base_score: 0.0,
             num_features: 2,
         };
         // feature[0] is irrelevant; split is on feature[1]
-        let left = PlaintextEvaluator.predict(&e, &vec![999.0, 0.0]);
-        let right = PlaintextEvaluator.predict(&e, &vec![0.0, 1.0]);
+        let left: f32 = PlaintextEvaluator.predict(&e, &vec![999.0, 0.0]);
+        let right: f32 = PlaintextEvaluator.predict(&e, &vec![0.0, 1.0]);
         approx::assert_abs_diff_eq!(left, -1.0, epsilon = 1e-6);
         approx::assert_abs_diff_eq!(right, 1.0, epsilon = 1e-6);
     }
@@ -307,7 +306,7 @@ mod tests {
 
     #[test]
     fn base_score_is_added_to_raw() {
-        let mut e = tiny_ensemble();
+        let mut e: Ensemble = tiny_ensemble();
         e.base_score = 2.0;
         // left branch gives -0.5 + 2.0 = 1.5
         approx::assert_abs_diff_eq!(
@@ -319,7 +318,7 @@ mod tests {
 
     #[test]
     fn zero_trees_returns_base_score() {
-        let e = Ensemble {
+        let e: Ensemble = Ensemble {
             trees: vec![],
             objective: Objective::BinaryLogistic,
             base_score: 0.5,
@@ -338,15 +337,15 @@ mod tests {
 
     #[test]
     fn sigmoid_sanity() {
-        let e = tiny_ensemble();
-        let p = PlaintextEvaluator.predict_proba(&e, &vec![2.0]);
+        let e: Ensemble = tiny_ensemble();
+        let p: f32 = PlaintextEvaluator.predict_proba(&e, &vec![2.0]);
         assert!(p > 0.5 && p < 1.0);
     }
 
     #[test]
     fn sigmoid_of_zero_is_half() {
         // base_score=0, both leaf values are 0 → raw=0 → sigmoid(0)=0.5
-        let nodes = vec![
+        let nodes: Vec<Node> = vec![
             Node {
                 split_feature: 0,
                 split_threshold: 1.0,
@@ -386,7 +385,7 @@ mod tests {
     fn sigmoid_known_values() {
         // sigmoid(-0.5) ≈ 0.37754066
         // sigmoid( 0.5) ≈ 0.62245934
-        let e = tiny_ensemble();
+        let e: Ensemble = tiny_ensemble();
         approx::assert_abs_diff_eq!(
             PlaintextEvaluator.predict_proba(&e, &vec![0.0]), // left → raw=-0.5
             0.37754066_f32,
@@ -401,7 +400,7 @@ mod tests {
 
     #[test]
     fn regression_predict_proba_is_raw_score() {
-        let mut e = tiny_ensemble();
+        let mut e: Ensemble = tiny_ensemble();
         e.objective = Objective::RegSquaredError;
         e.base_score = 1.0;
         // right branch: 0.5 + base 1.0 = 1.5 — no activation applied
@@ -414,7 +413,7 @@ mod tests {
 
     #[test]
     fn other_objective_predict_proba_is_raw_score() {
-        let mut e = tiny_ensemble();
+        let mut e: Ensemble = tiny_ensemble();
         e.objective = Objective::Other("custom:loss".into());
         approx::assert_abs_diff_eq!(
             PlaintextEvaluator.predict_proba(&e, &vec![0.0]),

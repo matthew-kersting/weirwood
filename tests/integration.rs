@@ -26,7 +26,7 @@ fn load_json(name: &str) -> Ensemble {
 
 #[test]
 fn two_trees_binary_loads_correctly() {
-    let e = load_json("two_trees_binary.json");
+    let e: Ensemble = load_json("two_trees_binary.json");
     assert_eq!(e.num_features, 2);
     assert_eq!(e.trees.len(), 2);
     assert_eq!(e.base_score, 0.0);
@@ -34,7 +34,7 @@ fn two_trees_binary_loads_correctly() {
 
 #[test]
 fn stump_regression_loads_correctly() {
-    let e = load_json("stump_regression.json");
+    let e: Ensemble = load_json("stump_regression.json");
     assert_eq!(e.num_features, 1);
     assert_eq!(e.trees.len(), 1);
     approx::assert_abs_diff_eq!(e.base_score, 1.0, epsilon = 1e-6);
@@ -42,27 +42,29 @@ fn stump_regression_loads_correctly() {
 
 #[test]
 fn missing_file_returns_io_error() {
-    let result = Ensemble::from_json_file("tests/fixtures/does_not_exist.json");
+    let result: Result<Ensemble, weirwood::Error> =
+        Ensemble::from_json_file("tests/fixtures/does_not_exist.json");
     assert!(matches!(result, Err(weirwood::Error::Io(_))));
 }
 
 #[test]
 fn invalid_json_returns_parse_error() {
-    let result = Ensemble::from_json_bytes(b"not json at all {{{");
+    let result: Result<Ensemble, weirwood::Error> =
+        Ensemble::from_json_bytes(b"not json at all {{{");
     assert!(matches!(result, Err(weirwood::Error::Json(_))));
 }
 
 #[test]
 fn empty_trees_array_is_valid() {
     // A model with zero trees is odd but structurally legal.
-    let json = r#"{
+    let json: &str = r#"{
         "learner": {
             "learner_model_param": { "base_score": "2.5", "num_class": "0", "num_feature": "3" },
             "objective": { "name": "reg:squarederror" },
             "gradient_booster": { "model": { "trees": [] } }
         }
     }"#;
-    let e = Ensemble::from_json_bytes(json.as_bytes()).unwrap();
+    let e: Ensemble = Ensemble::from_json_bytes(json.as_bytes()).unwrap();
     assert_eq!(e.trees.len(), 0);
     approx::assert_abs_diff_eq!(e.base_score, 2.5, epsilon = 1e-5);
 }
@@ -84,8 +86,8 @@ fn empty_trees_array_is_valid() {
 
 #[test]
 fn two_trees_raw_scores() {
-    let e = load_json("two_trees_binary.json");
-    let eval = PlaintextEvaluator;
+    let e: Ensemble = load_json("two_trees_binary.json");
+    let eval: PlaintextEvaluator = PlaintextEvaluator;
 
     approx::assert_abs_diff_eq!(eval.predict(&e, &vec![0.0, 0.0]), -0.5, epsilon = 1e-6);
     approx::assert_abs_diff_eq!(eval.predict(&e, &vec![2.0, 3.0]), 0.5, epsilon = 1e-6);
@@ -95,8 +97,8 @@ fn two_trees_raw_scores() {
 
 #[test]
 fn two_trees_boundary_conditions() {
-    let e = load_json("two_trees_binary.json");
-    let eval = PlaintextEvaluator;
+    let e: Ensemble = load_json("two_trees_binary.json");
+    let eval: PlaintextEvaluator = PlaintextEvaluator;
 
     // Both features exactly at threshold → both go left
     approx::assert_abs_diff_eq!(eval.predict(&e, &vec![1.5, 2.0]), -0.5, epsilon = 1e-6);
@@ -106,8 +108,8 @@ fn two_trees_boundary_conditions() {
 
 #[test]
 fn two_trees_predict_proba() {
-    let e = load_json("two_trees_binary.json");
-    let eval = PlaintextEvaluator;
+    let e: Ensemble = load_json("two_trees_binary.json");
+    let eval: PlaintextEvaluator = PlaintextEvaluator;
 
     // sigmoid(-0.5) = 1 / (1 + e^0.5) ≈ 0.37754066
     approx::assert_abs_diff_eq!(
@@ -150,8 +152,8 @@ fn two_trees_predict_proba() {
 
 #[test]
 fn regression_raw_scores() {
-    let e = load_json("stump_regression.json");
-    let eval = PlaintextEvaluator;
+    let e: Ensemble = load_json("stump_regression.json");
+    let eval: PlaintextEvaluator = PlaintextEvaluator;
 
     approx::assert_abs_diff_eq!(eval.predict(&e, &vec![0.0]), 0.5, epsilon = 1e-6);
     approx::assert_abs_diff_eq!(eval.predict(&e, &vec![2.0]), 1.5, epsilon = 1e-6);
@@ -161,12 +163,12 @@ fn regression_raw_scores() {
 
 #[test]
 fn regression_predict_proba_is_identity() {
-    let e = load_json("stump_regression.json");
-    let eval = PlaintextEvaluator;
+    let e: Ensemble = load_json("stump_regression.json");
+    let eval: PlaintextEvaluator = PlaintextEvaluator;
 
     // For regression the activation is identity, so predict == predict_proba.
-    let raw = eval.predict(&e, &vec![2.0]);
-    let proba = eval.predict_proba(&e, &vec![2.0]);
+    let raw: f32 = eval.predict(&e, &vec![2.0]);
+    let proba: f32 = eval.predict_proba(&e, &vec![2.0]);
     approx::assert_abs_diff_eq!(raw, proba, epsilon = 1e-9);
 }
 
@@ -203,8 +205,8 @@ const TRAINED_EXPECTED_PROBA: &[f32] = &[
 
 #[test]
 fn trained_json_matches_expected_outputs() {
-    let model = load_json("trained_binary.json");
-    let eval = PlaintextEvaluator;
+    let model: Ensemble = load_json("trained_binary.json");
+    let eval: PlaintextEvaluator = PlaintextEvaluator;
     for (features, &exp) in TRAINED_TEST_VECTORS.iter().zip(TRAINED_EXPECTED_PROBA) {
         let pred = eval.predict_proba(&model, &features.to_vec());
         approx::assert_abs_diff_eq!(pred, exp, epsilon = 1e-5);
@@ -213,9 +215,9 @@ fn trained_json_matches_expected_outputs() {
 
 #[test]
 fn trained_ubj_matches_expected_outputs() {
-    let model = Ensemble::from_ubj_file("tests/fixtures/trained_binary.ubj")
+    let model: Ensemble = Ensemble::from_ubj_file("tests/fixtures/trained_binary.ubj")
         .expect("load trained_binary.ubj");
-    let eval = PlaintextEvaluator;
+    let eval: PlaintextEvaluator = PlaintextEvaluator;
     for (features, &exp) in TRAINED_TEST_VECTORS.iter().zip(TRAINED_EXPECTED_PROBA) {
         let pred = eval.predict_proba(&model, &features.to_vec());
         approx::assert_abs_diff_eq!(pred, exp, epsilon = 1e-5);
@@ -224,18 +226,18 @@ fn trained_ubj_matches_expected_outputs() {
 
 #[test]
 fn ubj_and_json_loaders_produce_identical_predictions() {
-    let json_model = load_json("trained_binary.json");
-    let ubj_model = Ensemble::from_ubj_file("tests/fixtures/trained_binary.ubj")
+    let json_model: Ensemble = load_json("trained_binary.json");
+    let ubj_model: Ensemble = Ensemble::from_ubj_file("tests/fixtures/trained_binary.ubj")
         .expect("load trained_binary.ubj");
 
     assert_eq!(json_model.num_features, ubj_model.num_features);
     assert_eq!(json_model.trees.len(), ubj_model.trees.len());
     approx::assert_abs_diff_eq!(json_model.base_score, ubj_model.base_score, epsilon = 1e-6);
 
-    let eval = PlaintextEvaluator;
+    let eval: PlaintextEvaluator = PlaintextEvaluator;
     for features in TRAINED_TEST_VECTORS {
-        let pred_json = eval.predict_proba(&json_model, &features.to_vec());
-        let pred_ubj = eval.predict_proba(&ubj_model, &features.to_vec());
+        let pred_json: f32 = eval.predict_proba(&json_model, &features.to_vec());
+        let pred_ubj: f32 = eval.predict_proba(&ubj_model, &features.to_vec());
         approx::assert_abs_diff_eq!(pred_json, pred_ubj, epsilon = 1e-6);
     }
 }
