@@ -4,7 +4,7 @@ Privacy-preserving XGBoost inference via Fully Homomorphic Encryption, written i
 
 Load a trained XGBoost model, encrypt a feature vector on the client, and evaluate the entire boosted tree ensemble on ciphertext. The server computes the prediction without ever seeing the input data.
 
-**Status:** early development. Model loading and plaintext inference work today. The FHE evaluator is scaffolded behind the `tfhe-backend` feature flag and is the active area of development.
+**Status:** early development. Model loading and plaintext inference work today. Key generation, encryption, and decryption are complete. The FHE evaluator (encrypted inference) is the active area of development.
 
 ## How it works
 
@@ -21,9 +21,6 @@ Add to your `Cargo.toml`:
 ```toml
 [dependencies]
 weirwood = "0.1"
-
-# For encrypted inference:
-weirwood = { version = "0.1", features = ["tfhe-backend"] }
 ```
 
 ### Plaintext inference
@@ -36,17 +33,17 @@ model's objective (sigmoid for `binary:logistic`, identity for
 if you want the raw pre-activation score instead.
 
 ```rust
-use weirwood::{model::Ensemble, eval::PlaintextEvaluator};
+use weirwood::{model::WeirwoodTree, eval::PlaintextEvaluator};
 
 fn main() -> Result<(), weirwood::Error> {
-    // Load from JSON (text) or UBJ (binary) — both produce the same Ensemble.
-    let ensemble = Ensemble::from_json_file("model.json")?;
-    // or: let ensemble = Ensemble::from_ubj_file("model.ubj")?;
+    // Load from JSON (text) or UBJ (binary) — both produce the same WeirwoodTree.
+    let weirwood_tree = WeirwoodTree::from_json_file("model.json")?;
+    // or: let weirwood_tree = WeirwoodTree::from_ubj_file("model.ubj")?;
 
     let features = vec![1.0_f32, 0.5, 3.2, 0.1];
 
     // Returns probability for binary:logistic, raw score for regression.
-    let score = PlaintextEvaluator.predict_proba(&ensemble, &features);
+    let score = PlaintextEvaluator.predict_proba(&weirwood_tree, &features);
     println!("prediction: {score:.4}");
 
     Ok(())
@@ -56,9 +53,9 @@ fn main() -> Result<(), weirwood::Error> {
 To get the raw pre-activation score:
 
 ```rust
-use weirwood::{model::Ensemble, eval::{Evaluator, PlaintextEvaluator}};
+use weirwood::{model::WeirwoodTree, eval::{Evaluator, PlaintextEvaluator}};
 
-let raw = PlaintextEvaluator.predict(&ensemble, &features);
+let raw_score = PlaintextEvaluator.predict(&weirwood_tree, &features);
 ```
 
 Save the model from Python with:
@@ -70,15 +67,23 @@ booster.save_model("model.ubj")    # UBJ (binary, smaller on disk)
 
 ### Encrypted inference (in progress)
 
-```rust
-#[cfg(feature = "tfhe-backend")]
-{
-    use weirwood::fhe::{FheContext, FheEvaluator};
+Key management and encryption are ready. Encrypted inference is under active development.
 
-    let ctx = FheContext::generate()?;
-    let evaluator = FheEvaluator::new(ctx);
-    // encrypted predict coming in a future release
-}
+```rust
+use weirwood::fhe::{FheContext, FheEvaluator};
+
+// Generate a key pair. The client key is private; share only the server key.
+let ctx = FheContext::generate()?;
+ctx.set_active(); // installs the server key for homomorphic operations
+
+// Encrypt the feature vector on the client.
+let features = vec![1.0_f32, 0.5, 3.2, 0.1];
+let ciphertext = ctx.encrypt(&features);
+
+// Send `ctx.server_key()` and `ciphertext` to the inference server.
+// The server computes on ciphertext and returns an EncryptedScore.
+// Decrypt the result locally with the private key.
+// let score = ctx.decrypt_score(&encrypted_result);
 ```
 
 ## Project layout
@@ -87,9 +92,9 @@ booster.save_model("model.ubj")    # UBJ (binary, smaller on disk)
 src/
   lib.rs       public API and re-exports
   error.rs     WeirwoodError enum
-  model.rs     XGBoost IR types (Ensemble, Tree, Node) + JSON loader
+  model.rs     XGBoost IR types (WeirwoodTree, Tree, Node) + JSON loader
   eval.rs      Evaluator trait + PlaintextEvaluator
-  fhe.rs       FheContext + FheEvaluator stub (tfhe-backend feature)
+  fhe.rs       FheContext (key gen, encrypt, decrypt) + FheEvaluator stub
 ```
 
 ## Supported model formats
@@ -110,13 +115,7 @@ src/
 ## Building
 
 ```sh
-# library only
-cargo build
-
-# with FHE backend (pulls in tfhe-rs — expect a long compile)
-cargo build --features tfhe-backend
-
-# run tests
+cargo build   # tfhe-rs is a required dependency — expect a longer first compile
 cargo test
 ```
 
@@ -127,12 +126,12 @@ fixture (100 trees, depth 3, 2 features), 100,000 iterations each.
 Run `./benchmarks/run_benchmark.sh` to regenerate on your machine.
 
 <!-- BENCHMARK_TABLE_START -->
-_Last run: 2026-03-13 · model: `tests/fixtures/trained_binary.ubj` · 100,000 iterations_
+_Last run: 2026-03-14 · model: `tests/fixtures/trained_binary.ubj` · 100,000 iterations_
 
 | Backend                    | Total (ms)   | Per call (ns) | Throughput (inf/sec) |
 |----------------------------|-------------|---------------|---------------------|
-| weirwood (Rust, plaintext) |       0.666 |           6.7 |           150059123 |
-| XGBoost (Python)  |    6472.018 |       64720.2 |               15451 |
+| weirwood (Rust, plaintext) |       0.694 |           6.9 |           144194027 |
+| XGBoost (Python)  |   12887.545 |      128875.5 |                7759 |
 <!-- BENCHMARK_TABLE_END -->
 
 ## Performance notes

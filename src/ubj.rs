@@ -12,8 +12,8 @@ use crate::Error;
 
 /// Parse XGBoost UBJ bytes into a `serde_json::Value`.
 pub(crate) fn parse(data: &[u8]) -> Result<Value, Error> {
-    let mut pos = 0usize;
-    let value = parse_value(data, &mut pos)?;
+    let mut pos: usize = 0usize;
+    let value: Value = parse_value(data, &mut pos)?;
     Ok(value)
 }
 
@@ -25,7 +25,7 @@ fn read_byte(data: &[u8], pos: &mut usize) -> Result<u8, Error> {
     if *pos >= data.len() {
         return Err(Error::Format("unexpected end of UBJ data".into()));
     }
-    let b = data[*pos];
+    let b: u8 = data[*pos];
     *pos += 1;
     Ok(b)
 }
@@ -70,11 +70,11 @@ fn read_f64(data: &[u8], pos: &mut usize) -> Result<f64, Error> {
 /// Read a UBJSON string: a typed-integer length followed by UTF-8 bytes.
 /// Object keys use this format (without the preceding `S` marker).
 fn read_string(data: &[u8], pos: &mut usize) -> Result<String, Error> {
-    let len = read_count(data, pos)?;
+    let len: usize = read_count(data, pos)?;
     if *pos + len > data.len() {
         return Err(Error::Format("UBJ string truncated".into()));
     }
-    let s = std::str::from_utf8(&data[*pos..*pos + len])
+    let s: String = std::str::from_utf8(&data[*pos..*pos + len])
         .map_err(|_| Error::Format("UBJ string is not valid UTF-8".into()))?
         .to_owned();
     *pos += len;
@@ -84,7 +84,7 @@ fn read_string(data: &[u8], pos: &mut usize) -> Result<String, Error> {
 /// Read any UBJSON integer type and return it as a `usize` (used for counts
 /// and string lengths — must be non-negative).
 fn read_count(data: &[u8], pos: &mut usize) -> Result<usize, Error> {
-    let marker = read_byte(data, pos)?;
+    let marker: u8 = read_byte(data, pos)?;
     let n: i64 = match marker {
         b'i' => read_i8(data, pos)? as i64,
         b'U' => read_u8(data, pos)? as i64,
@@ -126,7 +126,7 @@ fn float_value(f: f64) -> Result<Value, Error> {
 // ---------------------------------------------------------------------------
 
 fn parse_value(data: &[u8], pos: &mut usize) -> Result<Value, Error> {
-    let marker = read_byte(data, pos)?;
+    let marker: u8 = read_byte(data, pos)?;
     match marker {
         b'N' => parse_value(data, pos), // no-op: skip and read next
         b'Z' => Ok(Value::Null),
@@ -196,15 +196,15 @@ fn parse_array(data: &[u8], pos: &mut usize) -> Result<Value, Error> {
     // Counted untyped array: `[` `#` count  values...
     if data[*pos] == b'#' {
         *pos += 1;
-        let count = read_count(data, pos)?;
-        let arr = (0..count)
+        let count: usize = read_count(data, pos)?;
+        let arr: Vec<Value> = (0..count)
             .map(|_| parse_value(data, pos))
             .collect::<Result<Vec<_>, _>>()?;
         return Ok(Value::Array(arr));
     }
 
     // Standard terminated array: `[` values... `]`
-    let mut arr = Vec::new();
+    let mut arr: Vec<Value> = Vec::new();
     loop {
         if *pos >= data.len() {
             return Err(Error::Format("unterminated UBJ array".into()));
@@ -226,7 +226,7 @@ fn parse_object(data: &[u8], pos: &mut usize) -> Result<Value, Error> {
     // Optimized typed object: `{` `$` type `#` count  (key value)...
     if data[*pos] == b'$' {
         *pos += 1;
-        let type_marker = read_byte(data, pos)?;
+        let type_marker: u8 = read_byte(data, pos)?;
         match read_byte(data, pos)? {
             b'#' => {}
             m => {
@@ -235,8 +235,8 @@ fn parse_object(data: &[u8], pos: &mut usize) -> Result<Value, Error> {
                 )));
             }
         }
-        let count = read_count(data, pos)?;
-        let mut map = Map::with_capacity(count);
+        let count: usize = read_count(data, pos)?;
+        let mut map: Map<String, Value> = Map::with_capacity(count);
         for _ in 0..count {
             let key = read_string(data, pos)?;
             let value = read_typed(data, pos, type_marker)?;
@@ -248,8 +248,8 @@ fn parse_object(data: &[u8], pos: &mut usize) -> Result<Value, Error> {
     // Counted untyped object: `{` `#` count  (key value)...
     if data[*pos] == b'#' {
         *pos += 1;
-        let count = read_count(data, pos)?;
-        let mut map = Map::with_capacity(count);
+        let count: usize = read_count(data, pos)?;
+        let mut map: Map<String, Value> = Map::with_capacity(count);
         for _ in 0..count {
             let key = read_string(data, pos)?;
             let value = parse_value(data, pos)?;
@@ -259,7 +259,7 @@ fn parse_object(data: &[u8], pos: &mut usize) -> Result<Value, Error> {
     }
 
     // Standard terminated object: `{` (key value)... `}`
-    let mut map = Map::new();
+    let mut map: Map<String, Value> = Map::new();
     loop {
         if *pos >= data.len() {
             return Err(Error::Format("unterminated UBJ object".into()));
@@ -295,7 +295,7 @@ mod tests {
             b'i', 1, b'b', // value: true
             b'T', b'}',
         ];
-        let v = parse(data).unwrap();
+        let v: Value = parse(data).unwrap();
         assert_eq!(v["a"], Value::Number(42.into()));
         assert_eq!(v["b"], Value::Bool(true));
     }
@@ -303,7 +303,7 @@ mod tests {
     #[test]
     fn parse_typed_int32_array() {
         // Encodes: [1, -1, 2]  as an optimized i32 array (big-endian)
-        let mut data = vec![b'[', b'$', b'l', b'#', b'i', 3];
+        let mut data: Vec<u8> = vec![b'[', b'$', b'l', b'#', b'i', 3];
         data.extend_from_slice(&1_i32.to_be_bytes());
         data.extend_from_slice(&(-1_i32).to_be_bytes());
         data.extend_from_slice(&2_i32.to_be_bytes());
@@ -318,14 +318,14 @@ mod tests {
     #[test]
     fn parse_typed_f32_array() {
         // Encodes: [0.5, -0.5]  as an optimized f32 array (big-endian)
-        let mut data = vec![b'[', b'$', b'd', b'#', b'i', 2];
+        let mut data: Vec<u8> = vec![b'[', b'$', b'd', b'#', b'i', 2];
         data.extend_from_slice(&0.5_f32.to_be_bytes());
         data.extend_from_slice(&(-0.5_f32).to_be_bytes());
 
-        let v = parse(&data).unwrap();
-        let arr = v.as_array().unwrap();
-        let a = arr[0].as_f64().unwrap() as f32;
-        let b = arr[1].as_f64().unwrap() as f32;
+        let v: Value = parse(&data).unwrap();
+        let arr: &Vec<Value> = v.as_array().unwrap();
+        let a: f32 = arr[0].as_f64().unwrap() as f32;
+        let b: f32 = arr[1].as_f64().unwrap() as f32;
         approx::assert_abs_diff_eq!(a, 0.5_f32, epsilon = 1e-7);
         approx::assert_abs_diff_eq!(b, -0.5_f32, epsilon = 1e-7);
     }
