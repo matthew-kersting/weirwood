@@ -1,7 +1,5 @@
 //! FHE context and encrypted evaluator.
 //!
-//! This module is only available with the `tfhe-backend` feature flag.
-//!
 //! # Key management model
 //!
 //! TFHE-rs uses a *symmetric* key model under the hood, but the roles map
@@ -33,17 +31,10 @@
 //! [`crate::eval::Evaluator`] once the circuit translation is finished.
 //! Use [`crate::eval::PlaintextEvaluator`] for inference today.
 
-use tfhe::{
-    ConfigBuilder, FheInt16, FheInt32, ServerKey,
-    generate_keys, set_server_key,
-};
 use tfhe::prelude::*;
+use tfhe::{ConfigBuilder, FheInt16, FheInt32, ServerKey, generate_keys, set_server_key};
 
-use crate::{
-    Error,
-    eval::Evaluator,
-    model::Ensemble,
-};
+use crate::{Error, eval::Evaluator, model::Ensemble};
 
 // ---------------------------------------------------------------------------
 // Constants and type aliases
@@ -76,8 +67,6 @@ pub type EncryptedScore = FheInt32;
 /// # Example
 ///
 /// ```no_run
-/// # #[cfg(feature = "tfhe-backend")]
-/// # {
 /// use weirwood::fhe::FheContext;
 ///
 /// let ctx = FheContext::generate()?;
@@ -90,7 +79,6 @@ pub type EncryptedScore = FheInt32;
 ///
 /// // let score: EncryptedScore = server.run_inference(...);
 /// // let result = ctx.decrypt_score(&score);
-/// # }
 /// # Ok::<(), weirwood::Error>(())
 /// ```
 pub struct FheContext {
@@ -101,7 +89,7 @@ pub struct FheContext {
 impl FheContext {
     /// Generate a fresh keypair with default 128-bit security parameters.
     pub fn generate() -> Result<Self, Error> {
-        let config = ConfigBuilder::default().build();
+        let config: tfhe::Config = ConfigBuilder::default().build();
         let (client_key, server_key) = generate_keys(config);
         Ok(FheContext {
             client_key,
@@ -133,9 +121,7 @@ impl FheContext {
         features
             .iter()
             .map(|&v| {
-                let scaled = (v * SCALE)
-                    .round()
-                    .clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+                let scaled = (v * SCALE).round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
                 FheInt16::encrypt(scaled, &self.client_key)
             })
             .collect()
@@ -215,16 +201,19 @@ mod tests {
     /// fixed-point rounding error.
     fn assert_round_trip(ctx: &FheContext, original: f32) {
         // Encryption uses the private ClientKey.
-        let ciphertext = ctx.encrypt(&[original]);
+        let ciphertext: Vec<tfhe::FheInt<tfhe::FheInt16Id>> = ctx.encrypt(&[original]);
 
         // Decryption also uses the private ClientKey.
         // The server never sees this step.
         let raw: i16 = ciphertext[0].decrypt(&ctx.client_key);
-        let recovered = raw as f32 / SCALE;
+        let recovered: f32 = raw as f32 / SCALE;
 
         // The expected decoded value is the rounded fixed-point representation,
         // not necessarily `original` exactly.
-        let expected = (original * SCALE).round().clamp(i16::MIN as f32, i16::MAX as f32) as i16 as f32 / SCALE;
+        let expected: f32 = (original * SCALE)
+            .round()
+            .clamp(i16::MIN as f32, i16::MAX as f32) as i16 as f32
+            / SCALE;
 
         approx::assert_abs_diff_eq!(recovered, expected, epsilon = 1e-6);
         // Also sanity-check against the original within the rounding bound.
@@ -239,9 +228,9 @@ mod tests {
     fn round_trip_typical_inference_vector() {
         // Represents a realistic feature vector passed to an XGBoost model
         // (e.g. age=35, income=0.72 normalised, debt_ratio=-0.15, score=320.0).
-        let ctx = FheContext::generate().unwrap();
+        let ctx: FheContext = FheContext::generate().unwrap();
         let features: &[f32] = &[35.0, 0.72, -0.15, 3.20];
-        let ciphertext = ctx.encrypt(features);
+        let ciphertext: Vec<tfhe::FheInt<tfhe::FheInt16Id>> = ctx.encrypt(features);
 
         for (i, &original) in features.iter().enumerate() {
             let raw: i16 = ciphertext[i].decrypt(&ctx.client_key);
@@ -252,7 +241,7 @@ mod tests {
 
     #[test]
     fn round_trip_negative_features() {
-        let ctx = FheContext::generate().unwrap();
+        let ctx: FheContext = FheContext::generate().unwrap();
         for &v in &[-1.0_f32, -0.5, -100.0, -327.0] {
             assert_round_trip(&ctx, v);
         }
@@ -260,13 +249,13 @@ mod tests {
 
     #[test]
     fn round_trip_zero() {
-        let ctx = FheContext::generate().unwrap();
+        let ctx: FheContext = FheContext::generate().unwrap();
         assert_round_trip(&ctx, 0.0);
     }
 
     #[test]
     fn round_trip_positive_features() {
-        let ctx = FheContext::generate().unwrap();
+        let ctx: FheContext = FheContext::generate().unwrap();
         for &v in &[0.01_f32, 1.0, 50.5, 327.0] {
             assert_round_trip(&ctx, v);
         }
@@ -280,11 +269,11 @@ mod tests {
     fn fixed_point_rounding_within_one_ulp() {
         // A value with sub-cent precision (1.234) should decode as 1.23,
         // not 1.234 — the third decimal is lost in encoding.
-        let ctx = FheContext::generate().unwrap();
+        let ctx: FheContext = FheContext::generate().unwrap();
 
-        let ciphertext = ctx.encrypt(&[1.234]);
+        let ciphertext: Vec<tfhe::FheInt<tfhe::FheInt16Id>> = ctx.encrypt(&[1.234]);
         let raw: i16 = ciphertext[0].decrypt(&ctx.client_key);
-        let recovered = raw as f32 / SCALE;
+        let recovered: f32 = raw as f32 / SCALE;
 
         // 1.234 * 100 = 123.4 → rounds to 123 → 1.23
         approx::assert_abs_diff_eq!(recovered, 1.23, epsilon = 1e-6);
@@ -300,16 +289,20 @@ mod tests {
         // used to encrypt; ctx_bob is a completely unrelated key pair.
         // Decrypting alice's ciphertext with bob's private key must not
         // recover the original value.
-        let ctx_alice = FheContext::generate().unwrap();
-        let ctx_bob = FheContext::generate().unwrap();
+        let ctx_alice: FheContext = FheContext::generate().unwrap();
+        let ctx_bob: FheContext = FheContext::generate().unwrap();
 
         let original: i16 = 42; // scaled value
-        let ciphertext = FheInt16::encrypt(original, &ctx_alice.client_key);
+        let ciphertext: tfhe::FheInt<tfhe::FheInt16Id> =
+            FheInt16::encrypt(original, &ctx_alice.client_key);
 
         let decrypted_by_alice: i16 = ciphertext.decrypt(&ctx_alice.client_key);
         let decrypted_by_bob: i16 = ciphertext.decrypt(&ctx_bob.client_key);
 
-        assert_eq!(decrypted_by_alice, original, "alice should recover her own ciphertext");
+        assert_eq!(
+            decrypted_by_alice, original,
+            "alice should recover her own ciphertext"
+        );
         assert_ne!(
             decrypted_by_bob, original,
             "bob's key should not decrypt alice's ciphertext \

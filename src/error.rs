@@ -11,7 +11,6 @@ pub enum Error {
     #[error("model format error: {0}")]
     Format(String),
 
-    #[cfg(feature = "tfhe-backend")]
     #[error("FHE error: {0}")]
     Fhe(String),
 }

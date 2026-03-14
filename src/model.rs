@@ -43,7 +43,7 @@ pub struct Tree {
 impl Tree {
     /// Walk the tree for a plaintext feature vector and return the leaf value.
     pub fn evaluate(&self, features: &[f32]) -> f32 {
-        let mut idx = 0usize;
+        let mut idx: usize = 0usize;
         loop {
             let node = &self.nodes[idx];
             if node.is_leaf() {
@@ -111,19 +111,19 @@ impl Ensemble {
     ///
     /// Save from Python with `booster.save_model("model.ubj")`.
     pub fn from_ubj_file(path: impl AsRef<Path>) -> Result<Self, Error> {
-        let bytes = std::fs::read(path)?;
+        let bytes: Vec<u8> = std::fs::read(path)?;
         Self::from_ubj_bytes(&bytes)
     }
 
     /// Load from raw UBJ bytes.
     pub fn from_ubj_bytes(bytes: &[u8]) -> Result<Self, Error> {
-        let value = crate::ubj::parse(bytes)?;
+        let value: serde_json::Value = crate::ubj::parse(bytes)?;
         let raw: RawModel = serde_json::from_value(value)?;
         Self::from_raw(raw)
     }
 
     fn from_raw(raw: RawModel) -> Result<Self, Error> {
-        let learner = raw.learner;
+        let learner: RawLearner = raw.learner;
 
         let num_features = learner
             .learner_model_param
@@ -131,15 +131,15 @@ impl Ensemble {
             .parse::<usize>()
             .map_err(|_| Error::Format("invalid num_feature".into()))?;
 
-        let base_score = parse_base_score(&learner.learner_model_param.base_score)?;
+        let base_score: f32 = parse_base_score(&learner.learner_model_param.base_score)?;
 
-        let num_class = learner
+        let num_class: usize = learner
             .learner_model_param
             .num_class
             .parse::<usize>()
             .unwrap_or(0);
 
-        let objective = Objective::from_str(&learner.objective.name, num_class);
+        let objective: Objective = Objective::from_str(&learner.objective.name, num_class);
 
         let raw_trees = learner
             .gradient_booster
@@ -171,7 +171,7 @@ impl Ensemble {
 /// Older versions store a plain float string (e.g. `"0.5"`) that is already
 /// in raw-score (logit) space and is added directly.
 fn parse_base_score(s: &str) -> Result<f32, Error> {
-    let trimmed = s.trim();
+    let trimmed: &str = s.trim();
     if trimmed.starts_with('[') && trimmed.ends_with(']') {
         let prob = trimmed[1..trimmed.len() - 1]
             .parse::<f32>()
@@ -197,7 +197,7 @@ fn tree_from_raw(raw: RawTree) -> Result<Tree, Error> {
         ));
     }
 
-    let nodes = (0..n)
+    let nodes: Vec<Node> = (0..n)
         .map(|i| Node {
             split_feature: raw.split_indices[i],
             split_threshold: raw.split_conditions[i],
