@@ -13,17 +13,11 @@
 //! let score = PlaintextEvaluator.predict(&ensemble, &features);
 //! # Ok::<(), weirwood::Error>(())
 //! ```
-//!
-//! # Feature flags
-//!
-//! - `tfhe-backend` — enables the [`fhe`] module and encrypted inference via TFHE-rs.
 
 pub mod error;
 pub mod eval;
+pub mod fhe;
 pub mod model;
 pub(crate) mod ubj;
-
-#[cfg(feature = "tfhe-backend")]
-pub mod fhe;
 
 pub use error::Error;
