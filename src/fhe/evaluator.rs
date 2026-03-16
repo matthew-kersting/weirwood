@@ -108,7 +108,7 @@ impl Evaluator for FheEvaluator {
             // eval_node returns FheInt16; widen before adding to the i32 accumulator.
             let tree_score: FheInt16 = eval_node(tree, 0, encrypted_features);
             let tree_score_i32: FheInt32 = FheInt32::cast_from(tree_score);
-            total = total + tree_score_i32;
+            total += tree_score_i32;
         }
         total
     }
