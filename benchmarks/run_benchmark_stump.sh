@@ -27,12 +27,17 @@ cd "$REPO_ROOT"
 # ---------------------------------------------------------------------------
 # Python plaintext benchmark
 # ---------------------------------------------------------------------------
-echo "=== Installing Python dependencies ==="
-python3 -m pip install -q -r benchmarks/requirements.txt
+# Use WEIRWOOD_PYTHON to point at a venv's interpreter, e.g.:
+#   WEIRWOOD_PYTHON=/path/to/venv/bin/python3 ./benchmarks/run_benchmark_stump.sh
+PYTHON="${WEIRWOOD_PYTHON:-python3}"
+
+echo "=== Checking Python dependencies (using $PYTHON) ==="
+"$PYTHON" -c "import xgboost, numpy" \
+    || { echo "ERROR: xgboost/numpy not available. Set WEIRWOOD_PYTHON to a venv interpreter."; exit 1; }
 
 echo ""
 echo "=== Python (XGBoost, plaintext stump) ==="
-PY_OUTPUT=$(python3 benchmarks/bench_python_stump.py "$MODEL")
+PY_OUTPUT=$("$PYTHON" benchmarks/bench_python_stump.py)
 echo "$PY_OUTPUT"
 
 PY_NS=$(   echo "$PY_OUTPUT" | awk -F= '/^BENCH_PY_NS=/   {print $2}')
@@ -56,6 +61,7 @@ FHE_KEYGEN_MS=$( echo "$FHE_OUTPUT" | awk -F= '/^BENCH_FHE_KEYGEN_MS=/  {print $
 FHE_ENC_MS=$(    echo "$FHE_OUTPUT" | awk -F= '/^BENCH_FHE_ENC_MS=/     {print $2}')
 FHE_INFER_S=$(   echo "$FHE_OUTPUT" | awk -F= '/^BENCH_FHE_INFER_S=/    {print $2}')
 FHE_DEC_MS=$(    echo "$FHE_OUTPUT" | awk -F= '/^BENCH_FHE_DEC_MS=/     {print $2}')
+FHE_THRU=$(      echo "$FHE_OUTPUT" | awk -F= '/^BENCH_FHE_THRU=/       {print $2}')
 DELTA=$(         echo "$FHE_OUTPUT" | awk -F= '/^BENCH_DELTA=/           {print $2}')
 
 # ---------------------------------------------------------------------------
@@ -64,10 +70,10 @@ DELTA=$(         echo "$FHE_OUTPUT" | awk -F= '/^BENCH_DELTA=/           {print 
 RUN_DATE=$(date -u '+%Y-%m-%d')
 
 export PLAIN_NS PLAIN_THRU PY_NS PY_THRU \
-       FHE_KEYGEN_MS FHE_ENC_MS FHE_INFER_S FHE_DEC_MS \
+       FHE_KEYGEN_MS FHE_ENC_MS FHE_INFER_S FHE_DEC_MS FHE_THRU \
        DELTA RUN_DATE MODEL
 
-python3 - <<'PYEOF'
+"$PYTHON" - <<'PYEOF'
 import os, re
 
 readme_path = "README.md"
@@ -80,6 +86,7 @@ fhe_keygen_ms = os.environ["FHE_KEYGEN_MS"]
 fhe_enc_ms    = os.environ["FHE_ENC_MS"]
 fhe_infer_s   = os.environ["FHE_INFER_S"]
 fhe_dec_ms    = os.environ["FHE_DEC_MS"]
+fhe_thru      = os.environ["FHE_THRU"]
 delta         = os.environ["DELTA"]
 run_date      = os.environ["RUN_DATE"]
 model         = os.environ["MODEL"]
@@ -90,16 +97,16 @@ fhe_infer_ms = f"{float(fhe_infer_s) * 1000:.0f}"
 table = (
     f"<!-- FHE_STUMP_TABLE_START -->\n"
     f"_Last run: {run_date} · model: `{model}` · stump (depth 1, 1 tree)_\n\n"
-    f"> **Note:** FHE inference latency is a single-call wall-clock measurement;\n"
-    f"> throughput figures for plaintext backends use 10,000 iterations.\n"
+    f"> **Note:** FHE latency is the average of 5 bootstrapping runs;\n"
+    f"> plaintext throughput uses 10,000 iterations.\n"
     f"> Key generation and encryption are one-time client costs.\n\n"
-    f"| Backend                        | Per call          | Throughput (inf/s) | Notes                        |\n"
-    f"|--------------------------------|-------------------|--------------------|------------------------------|\n"
-    f"| weirwood (Rust, plaintext)     | {plain_ns:>8} ns      | {plain_thru:>18} |                              |\n"
-    f"| XGBoost (Python, plaintext)    | {py_ns:>8} ns      | {py_thru:>18} |                              |\n"
-    f"| weirwood (Rust, **FHE**)       | {fhe_infer_ms:>8} ms      |                  — | 1 TFHE bootstrapping op      |\n\n"
+    f"| Backend                        | Per call          | Throughput (inf/s) | Notes                          |\n"
+    f"|--------------------------------|-------------------|--------------------|--------------------------------|\n"
+    f"| weirwood (Rust, plaintext)     | {plain_ns:>8} ns      | {plain_thru:>18} |                                |\n"
+    f"| XGBoost (Python, plaintext)    | {py_ns:>8} ns      | {py_thru:>18} |                                |\n"
+    f"| weirwood (Rust, **FHE**)       | {fhe_infer_ms:>8} ms      | {fhe_thru:>18} | avg 5 runs, 1 PBS op each      |\n\n"
     f"FHE phase breakdown: keygen {fhe_keygen_ms} ms · encrypt {fhe_enc_ms} ms · "
-    f"inference {fhe_infer_s} s · decrypt {fhe_dec_ms} ms · |Δ plaintext| = {delta}\n"
+    f"inference {fhe_infer_s} s (avg 5) · decrypt {fhe_dec_ms} ms · |Δ plaintext| = {delta}\n"
     f"<!-- FHE_STUMP_TABLE_END -->"
 )
 

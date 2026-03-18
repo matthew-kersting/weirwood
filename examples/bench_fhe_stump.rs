@@ -29,8 +29,8 @@ use weirwood::{
 const DEFAULT_MODEL: &str = "tests/fixtures/stump_regression.json";
 const PLAINTEXT_WARMUP: usize = 1_000;
 const PLAINTEXT_ITERS: usize = 10_000;
-// FHE is benchmarked with a single inference (one bootstrapping chain).
-const FHE_ITERS: usize = 1;
+// FHE is benchmarked over this many iterations and averaged.
+const FHE_ITERS: usize = 5;
 
 fn main() -> Result<(), weirwood::Error> {
     let model_path = std::env::args()
@@ -89,7 +89,7 @@ fn main() -> Result<(), weirwood::Error> {
     // -----------------------------------------------------------------------
     // FHE: inference latency (single call — bootstrapping dominates)
     // -----------------------------------------------------------------------
-    print!("Running FHE inference ({FHE_ITERS} iteration(s)) … ");
+    print!("Running FHE inference ({FHE_ITERS} iterations, will average) … ");
     std::io::Write::flush(&mut std::io::stdout()).ok();
     let t = Instant::now();
     let mut enc_score = fhe_eval.predict(&model, &enc_input);
@@ -117,7 +117,7 @@ fn main() -> Result<(), weirwood::Error> {
     println!("FHE phase breakdown");
     println!("  keygen    : {keygen_ms:.0} ms");
     println!("  encrypt   : {enc_ms:.3} ms");
-    println!("  inference : {fhe_s:.2} s  ({} bootstrapping op(s))", model.trees.len());
+    println!("  inference : {fhe_s:.2} s  (avg over {FHE_ITERS} runs, {} bootstrapping op(s) each)", model.trees.len());
     println!("  decrypt   : {dec_ms:.3} ms");
     println!();
     println!("Correctness check");
@@ -134,6 +134,7 @@ fn main() -> Result<(), weirwood::Error> {
     println!("BENCH_FHE_KEYGEN_MS={keygen_ms:.0}");
     println!("BENCH_FHE_ENC_MS={enc_ms:.3}");
     println!("BENCH_FHE_INFER_S={fhe_s:.2}");
+    println!("BENCH_FHE_THRU={:.2}", 1.0 / fhe_s);
     println!("BENCH_FHE_DEC_MS={dec_ms:.3}");
     println!("BENCH_FHE_SCORE={fhe_score:.4}");
     println!("BENCH_PLAIN_SCORE={plain_score:.4}");
