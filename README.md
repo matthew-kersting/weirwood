@@ -134,6 +134,27 @@ _Last run: 2026-03-14 · model: `tests/fixtures/trained_binary.ubj` · 100,000 i
 | XGBoost (Python)  |   12887.545 |      128875.5 |                7759 |
 <!-- BENCHMARK_TABLE_END -->
 
+## FHE Stump Benchmark
+
+End-to-end FHE inference on the single decision stump (`stump_regression.json`,
+depth 1, 1 tree, 1 feature).  This is the simplest XGBoost model supported by
+weirwood's FHE evaluator.  Because bootstrapping is expensive, FHE latency is
+measured as a single-call wall-clock time rather than a throughput figure;
+plaintext backends use 10,000 iterations for a stable per-call number.
+
+Run `./benchmarks/run_benchmark_stump.sh` to regenerate on your machine
+(expect ~5–15 min of CPU time).
+
+<!-- FHE_STUMP_TABLE_START -->
+_Last run: — · results not yet generated — run `./benchmarks/run_benchmark_stump.sh`_
+
+| Backend                        | Per call          | Throughput (inf/s) | Notes                        |
+|--------------------------------|-------------------|--------------------|------------------------------|
+| weirwood (Rust, plaintext)     |              — ns |                  — |                              |
+| XGBoost (Python, plaintext)    |              — ns |                  — |                              |
+| weirwood (Rust, **FHE**)       |              — ms |                  — | 1 TFHE bootstrapping op      |
+<!-- FHE_STUMP_TABLE_END -->
+
 ## Performance notes
 
 A typical XGBoost model with 100 trees at depth 5 requires roughly 31,000 bootstrapping operations. On CPU with `tfhe-rs`, each TFHE comparison takes about 10–20 ms, putting naive single-threaded inference around 5 minutes. `weirwood` parallelizes across nodes at the same tree depth using Rayon. GPU acceleration (targeting ~1 ms per comparison via `tfhe-rs`'s CUDA backend) is the primary optimization target for v0.2.
