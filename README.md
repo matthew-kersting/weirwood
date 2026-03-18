@@ -126,12 +126,12 @@ fixture (100 trees, depth 3, 2 features), 100,000 iterations each.
 Run `./benchmarks/run_benchmark.sh` to regenerate on your machine.
 
 <!-- BENCHMARK_TABLE_START -->
-_Last run: 2026-03-14 · model: `tests/fixtures/trained_binary.ubj` · 100,000 iterations_
+_Last run: 2026-03-18 · model: `tests/fixtures/trained_binary.ubj` · 100,000 iterations_
 
 | Backend                    | Total (ms)   | Per call (ns) | Throughput (inf/sec) |
 |----------------------------|-------------|---------------|---------------------|
-| weirwood (Rust, plaintext) |       0.694 |           6.9 |           144194027 |
-| XGBoost (Python)  |   12887.545 |      128875.5 |                7759 |
+| weirwood (Rust, plaintext) |       0.722 |           7.2 |           138416159 |
+| XGBoost (Python)  |    7799.412 |       77994.1 |               12821 |
 <!-- BENCHMARK_TABLE_END -->
 
 ## FHE Stump Benchmark
@@ -146,13 +146,19 @@ Run `./benchmarks/run_benchmark_stump.sh` to regenerate on your machine
 (expect ~5–15 min of CPU time).
 
 <!-- FHE_STUMP_TABLE_START -->
-_Last run: — · results not yet generated — run `./benchmarks/run_benchmark_stump.sh`_
+_Last run: 2026-03-18 · model: `tests/fixtures/stump_regression.json` · stump (depth 1, 1 tree)_
 
-| Backend                        | Per call          | Throughput (inf/s) | Notes                        |
-|--------------------------------|-------------------|--------------------|------------------------------|
-| weirwood (Rust, plaintext)     |              — ns |                  — |                              |
-| XGBoost (Python, plaintext)    |              — ns |                  — |                              |
-| weirwood (Rust, **FHE**)       |              — ms |                  — | 1 TFHE bootstrapping op      |
+> **Note:** FHE latency is the average of 5 bootstrapping runs;
+> plaintext throughput uses 10,000 iterations.
+> Key generation and encryption are one-time client costs.
+
+| Backend                        | Per call          | Throughput (inf/s) | Notes                          |
+|--------------------------------|-------------------|--------------------|--------------------------------|
+| weirwood (Rust, plaintext)     |      3.3 ns      |          301750151 |                                |
+| XGBoost (Python, plaintext)    |  61879.2 ns      |              16161 |                                |
+| weirwood (Rust, **FHE**)       |      520 ms      |               1.93 | avg 5 runs, 1 PBS op each      |
+
+FHE phase breakdown: keygen 958 ms · encrypt 0.813 ms · inference 0.52 s (avg 5) · decrypt 0.030 ms · |Δ plaintext| = 0.0000
 <!-- FHE_STUMP_TABLE_END -->
 
 ## Performance notes
