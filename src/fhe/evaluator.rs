@@ -26,6 +26,14 @@ impl FheEvaluator {
         FheEvaluator { ctx }
     }
 
+    /// Encrypt a plaintext feature vector using the private key.
+    ///
+    /// Convenience wrapper around [`FheContext::encrypt`] so callers do not
+    /// need to hold a separate reference to the context.
+    pub fn encrypt(&self, features: &[f32]) -> crate::fhe::EncryptedInput {
+        self.ctx.encrypt(features)
+    }
+
     /// Decrypt an encrypted score produced by [`Self::predict`].
     ///
     /// Delegates to [`FheContext::decrypt_score`].  In a real deployment only
