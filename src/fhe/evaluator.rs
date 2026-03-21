@@ -6,7 +6,8 @@ use tfhe::{FheInt16, FheInt32};
 use crate::eval::Evaluator;
 use crate::model::WeirwoodTree;
 
-use super::context::{EncryptedInput, EncryptedScore, FheContext, SCALE};
+use super::client::{EncryptedInput, EncryptedScore, SCALE};
+use super::server::ServerContext;
 
 // ---------------------------------------------------------------------------
 // FheEvaluator
@@ -14,32 +15,44 @@ use super::context::{EncryptedInput, EncryptedScore, FheContext, SCALE};
 
 /// Encrypted evaluator — runs XGBoost inference entirely in FHE.
 ///
-/// Accepts an [`EncryptedInput`] from [`FheContext::encrypt`] and returns an
-/// [`EncryptedScore`] that can be decrypted with [`FheContext::decrypt_score`]
-/// or the convenience wrapper [`FheEvaluator::decrypt_score`].
+/// Constructed from a [`ServerContext`] (which contains only the server key,
+/// no private key material).  In a real deployment the server receives a
+/// `ServerContext` from the client, creates an `FheEvaluator`, and evaluates
+/// any number of [`EncryptedInput`]s without ever learning the plaintext
+/// features or scores.
+///
+/// # Example
+///
+/// ```no_run
+/// use weirwood::fhe::{ClientContext, FheEvaluator};
+/// use weirwood::eval::Evaluator as _;
+/// use weirwood::model::WeirwoodTree;
+///
+/// let client = ClientContext::generate()?;
+/// let server_ctx = client.server_context();
+/// server_ctx.set_active();
+///
+/// let model = WeirwoodTree::from_json_file("model.json")?;
+/// let ciphertext = client.encrypt(&[1.5_f32, 0.3]);
+///
+/// let evaluator = FheEvaluator::new(server_ctx);
+/// let encrypted_score = evaluator.predict(&model, &ciphertext);
+///
+/// let score = client.decrypt_score(&encrypted_score);
+/// # Ok::<(), weirwood::Error>(())
+/// ```
 pub struct FheEvaluator {
-    pub(crate) ctx: FheContext,
+    // ServerContext holds only the ServerKey — no private key material.
+    _ctx: ServerContext,
 }
 
 impl FheEvaluator {
-    pub fn new(ctx: FheContext) -> Self {
-        FheEvaluator { ctx }
-    }
-
-    /// Encrypt a plaintext feature vector using the private key.
+    /// Create a new evaluator from a [`ServerContext`].
     ///
-    /// Convenience wrapper around [`FheContext::encrypt`] so callers do not
-    /// need to hold a separate reference to the context.
-    pub fn encrypt(&self, features: &[f32]) -> crate::fhe::EncryptedInput {
-        self.ctx.encrypt(features)
-    }
-
-    /// Decrypt an encrypted score produced by [`Self::predict`].
-    ///
-    /// Delegates to [`FheContext::decrypt_score`].  In a real deployment only
-    /// the client (who holds the private key) can call this.
-    pub fn decrypt_score(&self, score: &EncryptedScore) -> f32 {
-        self.ctx.decrypt_score(score)
+    /// The server key must already be installed via [`ServerContext::set_active`]
+    /// on the calling thread before [`predict`](Self::predict) is invoked.
+    pub fn new(ctx: ServerContext) -> Self {
+        FheEvaluator { _ctx: ctx }
     }
 }
 
@@ -66,7 +79,9 @@ fn eval_node(tree: &crate::model::Tree, node_idx: usize, features: &EncryptedInp
         // Trivially encrypt the scaled leaf weight.  No secret material is
         // involved; this just wraps the plaintext in the ciphertext format so
         // it can be combined with real ciphertexts via homomorphic operations.
-        let scaled: i16 = (node.leaf_value * SCALE).round() as i16;
+        let scaled: i16 = (node.leaf_value * SCALE)
+            .round()
+            .clamp(i16::MIN as f32, i16::MAX as f32) as i16;
         FheInt16::encrypt_trivial(scaled)
     } else {
         // Scale the plaintext threshold to match the fixed-point encoding of
@@ -100,8 +115,8 @@ impl Evaluator for FheEvaluator {
     /// and oblivious muxes (see [`eval_node`]).  Tree scores are accumulated
     /// into a single [`EncryptedScore`] together with the scaled `base_score`.
     ///
-    /// The server key must be installed via [`FheContext::set_active`] on the
-    /// calling thread before this method is invoked.
+    /// The server key must be installed via [`ServerContext::set_active`] on
+    /// the calling thread before this method is invoked.
     fn predict(
         &self,
         weirwood_tree: &WeirwoodTree,
@@ -109,7 +124,9 @@ impl Evaluator for FheEvaluator {
     ) -> EncryptedScore {
         // Start with the scaled base_score as a trivial ciphertext so that
         // subsequent additions stay in the same ciphertext domain.
-        let base_scaled = (weirwood_tree.base_score * SCALE).round() as i32;
+        let base_scaled = (weirwood_tree.base_score * SCALE)
+            .round()
+            .clamp(i32::MIN as f32, i32::MAX as f32) as i32;
         let mut total: FheInt32 = FheInt32::encrypt_trivial(base_scaled);
 
         for tree in &weirwood_tree.trees {
