@@ -123,7 +123,10 @@ fn main() -> Result<(), weirwood::Error> {
     println!("FHE phase breakdown");
     println!("  keygen    : {keygen_ms:.0} ms");
     println!("  encrypt   : {enc_ms:.3} ms");
-    println!("  inference : {fhe_s:.2} s  (avg over {FHE_ITERS} runs, {} bootstrapping op(s) each)", model.trees.len());
+    println!(
+        "  inference : {fhe_s:.2} s  (avg over {FHE_ITERS} runs, {} bootstrapping op(s) each)",
+        model.trees.len()
+    );
     println!("  decrypt   : {dec_ms:.3} ms");
     println!();
     println!("Correctness check");
