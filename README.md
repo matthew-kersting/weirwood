@@ -158,12 +158,12 @@ fixture (100 trees, depth 3, 2 features), 100,000 iterations each.
 Run `./benchmarks/run_benchmark.sh` to regenerate on your machine.
 
 <!-- BENCHMARK_TABLE_START -->
-_Last run: 2026-03-18 · model: `tests/fixtures/trained_binary.ubj` · 100,000 iterations_
+_Last run: 2026-03-21 · model: `tests/fixtures/trained_binary.ubj` · 100,000 iterations_
 
 | Backend                    | Total (ms)   | Per call (ns) | Throughput (inf/sec) |
 |----------------------------|-------------|---------------|---------------------|
-| weirwood (Rust, plaintext) |       0.722 |           7.2 |           138416159 |
-| XGBoost (Python)  |    7799.412 |       77994.1 |               12821 |
+| weirwood (Rust, plaintext) |       0.795 |           7.9 |           125823673 |
+| XGBoost (Python)  |    9318.350 |       93183.5 |               10732 |
 <!-- BENCHMARK_TABLE_END -->
 
 ## FHE Stump Benchmark
