@@ -1,8 +1,10 @@
-mod context;
+mod client;
 mod evaluator;
+mod server;
 
-pub use context::{EncryptedInput, EncryptedScore, FheContext, SCALE};
+pub use client::{ClientContext, EncryptedInput, EncryptedScore, SCALE};
 pub use evaluator::FheEvaluator;
+pub use server::ServerContext;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -16,11 +18,11 @@ mod tests {
     // -----------------------------------------------------------------------
     // Key management model (for readers of these tests)
     //
-    // PRIVATE — FheContext.client_key
+    // PRIVATE — ClientContext.client_key
     //   Used to encrypt inputs and decrypt outputs.
     //   Never leaves the client.
     //
-    // PUBLIC  — FheContext.server_key()
+    // PUBLIC  — ServerContext (obtained via ClientContext::server_context())
     //   Used by the inference server to perform homomorphic operations.
     //   Safe to share; reveals nothing about plaintexts or the client key.
     //
@@ -35,13 +37,13 @@ mod tests {
     /// Encrypt a single feature with the **private** key, then decrypt it
     /// with the same private key, and assert the value is recovered within
     /// fixed-point rounding error.
-    fn assert_round_trip(ctx: &FheContext, original: f32) {
+    fn assert_round_trip(client: &ClientContext, original: f32) {
         // Encryption uses the private ClientKey.
-        let ciphertext: Vec<tfhe::FheInt<tfhe::FheInt16Id>> = ctx.encrypt(&[original]);
+        let ciphertext: Vec<tfhe::FheInt<tfhe::FheInt16Id>> = client.encrypt(&[original]);
 
         // Decryption also uses the private ClientKey.
         // The server never sees this step.
-        let raw: i16 = ciphertext[0].decrypt(&ctx.client_key);
+        let raw: i16 = ciphertext[0].decrypt(&client.client_key);
         let recovered: f32 = raw as f32 / SCALE;
 
         // The expected decoded value is the rounded fixed-point representation,
@@ -64,12 +66,12 @@ mod tests {
     fn round_trip_typical_inference_vector() {
         // Represents a realistic feature vector passed to an XGBoost model
         // (e.g. age=35, income=0.72 normalised, debt_ratio=-0.15, score=320.0).
-        let ctx: FheContext = FheContext::generate().unwrap();
+        let client: ClientContext = ClientContext::generate().unwrap();
         let features: &[f32] = &[35.0, 0.72, -0.15, 3.20];
-        let ciphertext: Vec<tfhe::FheInt<tfhe::FheInt16Id>> = ctx.encrypt(features);
+        let ciphertext: Vec<tfhe::FheInt<tfhe::FheInt16Id>> = client.encrypt(features);
 
         for (i, &original) in features.iter().enumerate() {
-            let raw: i16 = ciphertext[i].decrypt(&ctx.client_key);
+            let raw: i16 = ciphertext[i].decrypt(&client.client_key);
             let recovered = raw as f32 / SCALE;
             approx::assert_abs_diff_eq!(recovered, original, epsilon = FIXED_POINT_EPSILON + 1e-6);
         }
@@ -77,23 +79,23 @@ mod tests {
 
     #[test]
     fn round_trip_negative_features() {
-        let ctx: FheContext = FheContext::generate().unwrap();
+        let client: ClientContext = ClientContext::generate().unwrap();
         for &v in &[-1.0_f32, -0.5, -100.0, -327.0] {
-            assert_round_trip(&ctx, v);
+            assert_round_trip(&client, v);
         }
     }
 
     #[test]
     fn round_trip_zero() {
-        let ctx: FheContext = FheContext::generate().unwrap();
-        assert_round_trip(&ctx, 0.0);
+        let client: ClientContext = ClientContext::generate().unwrap();
+        assert_round_trip(&client, 0.0);
     }
 
     #[test]
     fn round_trip_positive_features() {
-        let ctx: FheContext = FheContext::generate().unwrap();
+        let client: ClientContext = ClientContext::generate().unwrap();
         for &v in &[0.01_f32, 1.0, 50.5, 327.0] {
-            assert_round_trip(&ctx, v);
+            assert_round_trip(&client, v);
         }
     }
 
@@ -105,10 +107,10 @@ mod tests {
     fn fixed_point_rounding_within_one_ulp() {
         // A value with sub-cent precision (1.234) should decode as 1.23,
         // not 1.234 — the third decimal is lost in encoding.
-        let ctx: FheContext = FheContext::generate().unwrap();
+        let client: ClientContext = ClientContext::generate().unwrap();
 
-        let ciphertext: Vec<tfhe::FheInt<tfhe::FheInt16Id>> = ctx.encrypt(&[1.234]);
-        let raw: i16 = ciphertext[0].decrypt(&ctx.client_key);
+        let ciphertext: Vec<tfhe::FheInt<tfhe::FheInt16Id>> = client.encrypt(&[1.234]);
+        let raw: i16 = ciphertext[0].decrypt(&client.client_key);
         let recovered: f32 = raw as f32 / SCALE;
 
         // 1.234 * 100 = 123.4 → rounds to 123 → 1.23
@@ -136,12 +138,16 @@ mod tests {
         use crate::eval::{Evaluator as _, PlaintextEvaluator};
         use crate::model::WeirwoodTree;
 
-        let ctx: FheContext = FheContext::generate().unwrap();
-        ctx.set_active();
+        // --- Client ---
+        let client: ClientContext = ClientContext::generate().unwrap();
+        let server_ctx: ServerContext = client.server_context();
+
+        // --- Server setup ---
+        server_ctx.set_active();
+        let evaluator: FheEvaluator = FheEvaluator::new(server_ctx);
 
         let model: WeirwoodTree =
             WeirwoodTree::from_json_file("tests/fixtures/stump_regression.json").unwrap();
-        let evaluator: FheEvaluator = FheEvaluator::new(ctx);
 
         // Probe both branches and the exact boundary.
         // stump: feature[0] <= 1.5 → left (leaf = -0.5), else right (leaf = 0.5)
@@ -155,13 +161,15 @@ mod tests {
         for &feature_val in test_cases {
             let features: Vec<f32> = vec![feature_val];
 
+            // --- Client: plaintext reference and encryption ---
             let plaintext_score: f32 = PlaintextEvaluator.predict(&model, &features);
+            let encrypted_input: EncryptedInput = client.encrypt(&features);
 
-            let encrypted_input: Vec<tfhe::FheInt<tfhe::FheInt16Id>> =
-                evaluator.ctx.encrypt(&features);
-            let encrypted_score: tfhe::FheInt<tfhe::FheInt32Id> =
-                evaluator.predict(&model, &encrypted_input);
-            let fhe_score: f32 = evaluator.decrypt_score(&encrypted_score);
+            // --- Server: FHE evaluation ---
+            let encrypted_score: EncryptedScore = evaluator.predict(&model, &encrypted_input);
+
+            // --- Client: decryption and comparison ---
+            let fhe_score: f32 = client.decrypt_score(&encrypted_score);
 
             approx::assert_abs_diff_eq!(fhe_score, plaintext_score, epsilon = CIRCUIT_EPSILON);
         }
@@ -173,19 +181,19 @@ mod tests {
 
     #[test]
     fn wrong_private_key_gives_garbage() {
-        // Simulate two independent users.  ctx_alice holds the private key
-        // used to encrypt; ctx_bob is a completely unrelated key pair.
+        // Simulate two independent users.  client_alice holds the private key
+        // used to encrypt; client_bob is a completely unrelated key pair.
         // Decrypting alice's ciphertext with bob's private key must not
         // recover the original value.
-        let ctx_alice: FheContext = FheContext::generate().unwrap();
-        let ctx_bob: FheContext = FheContext::generate().unwrap();
+        let client_alice: ClientContext = ClientContext::generate().unwrap();
+        let client_bob: ClientContext = ClientContext::generate().unwrap();
 
         let original: i16 = 42; // scaled value
         let ciphertext: tfhe::FheInt<tfhe::FheInt16Id> =
-            tfhe::FheInt16::encrypt(original, &ctx_alice.client_key);
+            tfhe::FheInt16::encrypt(original, &client_alice.client_key);
 
-        let decrypted_by_alice: i16 = ciphertext.decrypt(&ctx_alice.client_key);
-        let decrypted_by_bob: i16 = ciphertext.decrypt(&ctx_bob.client_key);
+        let decrypted_by_alice: i16 = ciphertext.decrypt(&client_alice.client_key);
+        let decrypted_by_bob: i16 = ciphertext.decrypt(&client_bob.client_key);
 
         assert_eq!(
             decrypted_by_alice, original,
