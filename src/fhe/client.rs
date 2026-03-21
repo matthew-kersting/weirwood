@@ -43,10 +43,9 @@ use super::server::ServerContext;
 /// Fixed-point scale factor applied to `f32` features before encryption.
 ///
 /// An `f32` value `v` is stored as `round(v * SCALE)` clamped to `i16`.
-/// The [`FheEvaluator`] must scale plaintext leaf values by the same factor
-/// so that [`ClientContext::decrypt_score`] produces the correct result.
-///
-/// [`FheEvaluator`]: super::evaluator::FheEvaluator
+/// The [`FheEvaluator`](super::evaluator::FheEvaluator) must scale plaintext
+/// leaf values by the same factor so that [`ClientContext::decrypt_score`]
+/// produces the correct result.
 pub const SCALE: f32 = 100.0;
 
 /// An encrypted feature vector produced by [`ClientContext::encrypt`].
@@ -69,8 +68,8 @@ pub type EncryptedScore = tfhe::FheInt32;
 /// Client-side FHE context — holds the private key and is never shared.
 ///
 /// Responsible for key generation, feature encryption, and score decryption.
-/// Call [`server_context`] to obtain a [`ServerContext`] that can safely be
-/// handed to the inference server.
+/// Call [`server_context`](Self::server_context) to obtain a [`ServerContext`]
+/// that can safely be handed to the inference server.
 ///
 /// # Example
 ///
@@ -120,8 +119,8 @@ impl ClientContext {
 
     /// Extract the server-side context to share with the inference server.
     ///
-    /// Clones the [`ServerKey`] — this is a one-time, expected cost (~50–200 MB
-    /// of key material).  The private [`ClientKey`] is **not** included.
+    /// Clones the server key — this is a one-time, expected cost (~50–200 MB
+    /// of key material).  The private client key is **not** included.
     ///
     /// [`ServerKey`]: tfhe::ServerKey
     pub fn server_context(&self) -> ServerContext {
@@ -147,11 +146,9 @@ impl ClientContext {
 
     /// Decrypt an encrypted ensemble score back to `f32`.
     ///
-    /// The [`FheEvaluator`] produces leaf-value sums where every leaf is
-    /// scaled by [`SCALE`], so this method divides the decrypted integer by
-    /// [`SCALE`] to recover the original float range.
-    ///
-    /// [`FheEvaluator`]: super::evaluator::FheEvaluator
+    /// The [`FheEvaluator`](super::evaluator::FheEvaluator) produces leaf-value
+    /// sums where every leaf is scaled by [`SCALE`], so this method divides the
+    /// decrypted integer by [`SCALE`] to recover the original float range.
     pub fn decrypt_score(&self, score: &EncryptedScore) -> f32 {
         let raw: i32 = score.decrypt(&self.client_key);
         raw as f32 / SCALE

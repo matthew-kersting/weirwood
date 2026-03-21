@@ -112,7 +112,7 @@ impl Evaluator for FheEvaluator {
     /// Run XGBoost inference over an encrypted feature vector.
     ///
     /// Each tree is evaluated by recursively applying bootstrapped comparisons
-    /// and oblivious muxes (see [`eval_node`]).  Tree scores are accumulated
+    /// and oblivious muxes.  Tree scores are accumulated
     /// into a single [`EncryptedScore`] together with the scaled `base_score`.
     ///
     /// The server key must be installed via [`ServerContext::set_active`] on

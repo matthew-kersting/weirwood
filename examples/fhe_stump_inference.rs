@@ -1,11 +1,22 @@
 //! End-to-end FHE inference example on the stump regression fixture.
 //!
-//! Demonstrates the full privacy-preserving evaluation flow:
-//!   1. Client generates FHE key material.
-//!   2. Client encrypts a feature vector with their private key.
-//!   3. Server evaluates the XGBoost stump entirely in FHE — it never sees
+//! Demonstrates the full privacy-preserving evaluation flow across the two
+//! logical parties:
+//!
+//!   **Client**
+//!   1. Generates FHE key material (`ClientContext::generate`).
+//!   2. Extracts a `ServerContext` (server key only) to share with the server.
+//!   3. Encrypts a feature vector with the private key.
+//!   4. Decrypts the inference result returned by the server.
+//!
+//!   **Server**
+//!   5. Installs the server key (`ServerContext::set_active`).
+//!   6. Evaluates the XGBoost stump entirely in FHE — it never sees
 //!      plaintext features or the score.
-//!   4. Client decrypts the result.
+//!
+//! In this single-process demo both parties run in the same `main`, but the
+//! types make the boundary explicit: `FheEvaluator` holds only a
+//! `ServerContext` and cannot decrypt anything.
 //!
 //! The plaintext result from `PlaintextEvaluator` is shown alongside for
 //! comparison.  The two scores must agree within fixed-point rounding error
@@ -26,7 +37,7 @@ use std::time::Instant;
 
 use weirwood::{
     eval::{Evaluator as _, PlaintextEvaluator},
-    fhe::{FheContext, FheEvaluator},
+    fhe::{ClientContext, FheEvaluator},
     model::WeirwoodTree,
 };
 
@@ -58,18 +69,23 @@ fn main() -> Result<(), weirwood::Error> {
     print!("Generating FHE keys … ");
     std::io::Write::flush(&mut std::io::stdout()).ok();
     let t_keygen = Instant::now();
-    let ctx = FheContext::generate()?;
+    let client = ClientContext::generate()?;
     let keygen_ms = t_keygen.elapsed().as_secs_f64() * 1000.0;
     println!("{keygen_ms:.0} ms");
     println!();
 
-    // Install the server key on this thread (in a real deployment the server
-    // would receive only server_key() — the client key stays local).
-    ctx.set_active();
-    let evaluator = FheEvaluator::new(ctx);
+    // Client extracts the server context (ServerKey only — no private key).
+    // In a real deployment this is what gets sent over the wire to the server.
+    let server_ctx = client.server_context();
 
     // -----------------------------------------------------------------------
-    // For each test point: encrypt → FHE predict → decrypt, compare plaintext
+    // Server setup
+    // -----------------------------------------------------------------------
+    server_ctx.set_active();
+    let evaluator = FheEvaluator::new(server_ctx);
+
+    // -----------------------------------------------------------------------
+    // For each test point: client encrypts → server evaluates → client decrypts
     // -----------------------------------------------------------------------
     println!(
         "  {:<12}  {:<14}  {:<14}  {:<12}  {}",
@@ -80,12 +96,12 @@ fn main() -> Result<(), weirwood::Error> {
     for &v in TEST_CASES {
         let features = vec![v];
 
-        // Plaintext reference
+        // Plaintext reference (client-side)
         let plain_score = PlaintextEvaluator.predict(&model, &features);
 
         // Client: encrypt
         let t_enc = Instant::now();
-        let enc_input = evaluator.encrypt(&features);
+        let enc_input = client.encrypt(&features);
         let enc_ms = t_enc.elapsed().as_secs_f64() * 1000.0;
 
         // Server: FHE evaluation
@@ -95,7 +111,7 @@ fn main() -> Result<(), weirwood::Error> {
 
         // Client: decrypt
         let t_dec = Instant::now();
-        let fhe_score = evaluator.decrypt_score(&enc_score);
+        let fhe_score = client.decrypt_score(&enc_score);
         let dec_ms = t_dec.elapsed().as_secs_f64() * 1000.0;
 
         let delta = (fhe_score - plain_score).abs();
