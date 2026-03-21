@@ -25,7 +25,6 @@ use tfhe::{ServerKey, set_server_key};
 ///
 /// [`ClientContext::server_context`]: super::client::ClientContext::server_context
 /// [`FheEvaluator::new`]: super::evaluator::FheEvaluator::new
-/// [`ServerKey`]: tfhe::ServerKey
 pub struct ServerContext {
     pub(crate) server_key: ServerKey,
 }
@@ -46,10 +45,9 @@ impl ServerContext {
     /// operations.
     ///
     /// Must be called on the thread that will run inference before invoking
-    /// [`FheEvaluator::predict`].  Each call clones the server key internally
-    /// (unavoidable due to the tfhe-rs API); avoid calling this in a hot loop.
-    ///
-    /// [`FheEvaluator::predict`]: super::evaluator::FheEvaluator::predict
+    /// `FheEvaluator::predict`.
+    /// Each call clones the server key internally (unavoidable due to the
+    /// tfhe-rs API); avoid calling this in a hot loop.
     pub fn set_active(&self) {
         set_server_key(self.server_key.clone());
     }

@@ -22,7 +22,7 @@ use std::time::Instant;
 
 use weirwood::{
     eval::{Evaluator as _, PlaintextEvaluator},
-    fhe::{FheContext, FheEvaluator},
+    fhe::{ClientContext, FheEvaluator},
     model::WeirwoodTree,
 };
 
@@ -52,42 +52,48 @@ fn main() -> Result<(), weirwood::Error> {
     // -----------------------------------------------------------------------
     // Plaintext baseline
     // -----------------------------------------------------------------------
-    let evaluator = PlaintextEvaluator;
+    let plain_eval = PlaintextEvaluator;
 
     for _ in 0..PLAINTEXT_WARMUP {
-        evaluator.predict(&model, &features);
+        plain_eval.predict(&model, &features);
     }
 
     let t = Instant::now();
     for _ in 0..PLAINTEXT_ITERS {
-        evaluator.predict(&model, &features);
+        plain_eval.predict(&model, &features);
     }
     let plain_elapsed = t.elapsed();
     let plain_ns = plain_elapsed.as_nanos() as f64 / PLAINTEXT_ITERS as f64;
     let plain_thru = PLAINTEXT_ITERS as f64 / plain_elapsed.as_secs_f64();
 
     // -----------------------------------------------------------------------
-    // FHE: key generation
+    // Client: key generation
     // -----------------------------------------------------------------------
     print!("Generating FHE keys … ");
     std::io::Write::flush(&mut std::io::stdout()).ok();
     let t_keygen = Instant::now();
-    let ctx = FheContext::generate()?;
+    let client = ClientContext::generate()?;
     let keygen_ms = t_keygen.elapsed().as_secs_f64() * 1000.0;
     println!("{keygen_ms:.0} ms");
 
-    ctx.set_active();
-    let fhe_eval = FheEvaluator::new(ctx);
+    // Client extracts the server context (ServerKey only — no private key).
+    let server_ctx = client.server_context();
 
     // -----------------------------------------------------------------------
-    // FHE: encryption latency
+    // Server setup
+    // -----------------------------------------------------------------------
+    server_ctx.set_active();
+    let fhe_eval = FheEvaluator::new(server_ctx);
+
+    // -----------------------------------------------------------------------
+    // Client: encryption latency
     // -----------------------------------------------------------------------
     let t = Instant::now();
-    let enc_input = fhe_eval.encrypt(&features);
+    let enc_input = client.encrypt(&features);
     let enc_ms = t.elapsed().as_secs_f64() * 1000.0;
 
     // -----------------------------------------------------------------------
-    // FHE: inference latency (single call — bootstrapping dominates)
+    // Server: inference latency (averaged over FHE_ITERS — bootstrapping dominates)
     // -----------------------------------------------------------------------
     print!("Running FHE inference ({FHE_ITERS} iterations, will average) … ");
     std::io::Write::flush(&mut std::io::stdout()).ok();
@@ -101,10 +107,10 @@ fn main() -> Result<(), weirwood::Error> {
     println!("done");
 
     // -----------------------------------------------------------------------
-    // FHE: decryption latency
+    // Client: decryption latency
     // -----------------------------------------------------------------------
     let t = Instant::now();
-    let fhe_score = fhe_eval.decrypt_score(&enc_score);
+    let fhe_score = client.decrypt_score(&enc_score);
     let dec_ms = t.elapsed().as_secs_f64() * 1000.0;
 
     let plain_score = PlaintextEvaluator.predict(&model, &features);
