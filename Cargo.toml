@@ -12,13 +12,13 @@ readme = "README.md"
 exclude = ["weirwood_1pager.md", "benchmarks/"]
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+thiserror = "2.0.18"
 
 [dependencies.tfhe]
-version = "0.10"
-features = ["shortint", "integer", "seeder_unix"]
+version = "1.5.4"
+features = ["shortint", "integer"]
 
 [dev-dependencies]
-approx = "0.5"
+approx = "0.5.1"
