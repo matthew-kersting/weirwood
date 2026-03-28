@@ -118,12 +118,14 @@ src/
 
 examples/
   plaintext_inference.rs    end-to-end plaintext demo
-  fhe_stump_inference.rs    end-to-end FHE demo (two-party flow)
+  fhe_stump_inference.rs    end-to-end FHE demo on single stump
+  fhe_full_inference.rs     end-to-end FHE demo on full ensemble (client-side activation)
   bench_plaintext.rs        plaintext throughput benchmark
-  bench_fhe_stump.rs        FHE latency benchmark
+  bench_fhe_stump.rs        FHE latency benchmark (stump)
+  bench_fhe_full.rs         FHE latency benchmark (full 100-tree ensemble)
 
 benchmarks/
-  run_benchmark.sh          plaintext benchmark + README update
+  run_benchmark.sh          full benchmark (plaintext + FHE) + README update
   run_benchmark_stump.sh    FHE stump benchmark + README update
   bench_python.py           Python/XGBoost baseline (plaintext)
   bench_python_stump.py     Python/XGBoost stump baseline
@@ -153,17 +155,20 @@ cargo test
 
 ## Benchmarks
 
-Plaintext inference throughput measured on the committed `trained_binary.ubj`
-fixture (100 trees, depth 3, 2 features), 100,000 iterations each.
-Run `./benchmarks/run_benchmark.sh` to regenerate on your machine.
+Inference benchmarks on the committed `trained_binary.ubj` fixture (100 trees,
+depth 3, 2 features, `binary:logistic`).  Run `./benchmarks/run_benchmark.sh`
+to regenerate on your machine (expect ~5–10 min due to the FHE run).
 
 <!-- BENCHMARK_TABLE_START -->
-_Last run: 2026-03-21 · model: `tests/fixtures/trained_binary.ubj` · 100,000 iterations_
+_Last run: 2026-03-28 · model: `tests/fixtures/trained_binary.ubj` · plaintext: 100,000 iterations · FHE: 1 run_
 
-| Backend                    | Total (ms)   | Per call (ns) | Throughput (inf/sec) |
-|----------------------------|-------------|---------------|---------------------|
-| weirwood (Rust, plaintext) |       0.795 |           7.9 |           125823673 |
-| XGBoost (Python)  |    9318.350 |       93183.5 |               10732 |
+| Backend                        | Per call        | Throughput (inf/s) | Notes                              |
+|--------------------------------|-----------------|--------------------|------------------------------------|
+| weirwood (Rust, plaintext)     |      10.8 ns    |           92192834 |                                    |
+| XGBoost (Python, plaintext)    |   75315.6 ns    |              13277 |                                    |
+| weirwood (Rust, **FHE**)       |     0.9 s       |             1.0672 | 1 run, 1 PBS ops              |
+
+FHE phase breakdown: keygen 854 ms · encrypt 1.578 ms · inference 0.9 s · decrypt 0.035 ms · |Δ plaintext| = 0.0000
 <!-- BENCHMARK_TABLE_END -->
 
 ## FHE Stump Benchmark
