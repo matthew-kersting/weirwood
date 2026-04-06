@@ -4,7 +4,7 @@ Privacy-preserving XGBoost inference via Fully Homomorphic Encryption, written i
 
 Load a trained XGBoost model, encrypt a feature vector on the client, and evaluate the entire boosted tree ensemble on ciphertext. The server computes the prediction without ever seeing the input data.
 
-**Status:** Model loading, plaintext inference, and FHE inference are all working. The FHE evaluator supports regression (`reg:squarederror`) and produces results matching plaintext within fixed-point rounding error (±0.01 with `SCALE=100`).
+**Status:** Model loading, plaintext inference, and FHE inference are all working. The FHE evaluator supports full multi-tree ensembles of arbitrary depth, validated on a 100-tree depth-3 `binary:logistic` model. Results match plaintext within fixed-point rounding error (±0.01 with `SCALE=100`). Sigmoid and softmax activations are applied client-side on the decrypted raw score.
 
 ## How it works
 
@@ -96,8 +96,11 @@ let encrypted_score = evaluator.predict(&model, &ciphertext);
 // --- "Send encrypted_score back to the client" ---
 
 // --- Client ---
-let score = client.decrypt_score(&encrypted_score);
-println!("prediction: {score:.4}");
+// decrypt_score returns the raw pre-activation ensemble score.
+// Apply sigmoid / identity client-side depending on the model objective.
+let raw_score = client.decrypt_score(&encrypted_score);
+println!("prediction: {raw_score:.4}"); // for regression (identity activation)
+// for binary:logistic: let proba = 1.0 / (1.0 + (-raw_score).exp());
 ```
 
 In a single-process deployment (as in the examples) both parties run in the same process — the `server_ctx` is passed locally instead of over a network.
@@ -143,7 +146,7 @@ benchmarks/
 | Objective | Plaintext | FHE |
 |-----------|-----------|-----|
 | `reg:squarederror` | Yes | Yes |
-| `binary:logistic` | Yes | Partial (raw score; sigmoid applied post-decrypt) |
+| `binary:logistic` | Yes | Yes (sigmoid applied client-side post-decrypt) |
 | `multi:softmax` | Partial | Planned |
 
 ## Building
@@ -200,7 +203,11 @@ FHE phase breakdown: keygen 958 ms · encrypt 0.813 ms · inference 0.52 s (avg 
 
 ## Performance notes
 
-A typical XGBoost model with 100 trees at depth 5 requires roughly 31,000 bootstrapping operations. On CPU with `tfhe-rs`, each TFHE comparison takes about 10–20 ms, putting naive single-threaded inference around 5 minutes. GPU acceleration (targeting ~1 ms per comparison via `tfhe-rs`'s CUDA backend) is the primary optimization target for v0.3.
+Each tree node comparison requires one TFHE programmable-bootstrapping operation. On CPU with `tfhe-rs`, each PBS call takes roughly 500 ms single-threaded, so inference latency scales linearly with the number of internal nodes evaluated (all nodes are visited obliviously regardless of the actual path taken). A 100-tree depth-3 model has ~700 internal nodes and takes ~5–10 min single-threaded on CPU.
+
+The two primary optimization targets for v0.3:
+- **Rayon parallelization** — nodes within a tree and across trees are independent; `tfhe-rs` exposes thread-safe bootstrapping. Parallelizing across all trees on a 16-core machine would reduce the 100-tree depth-3 latency to under a minute.
+- **GPU acceleration** — `tfhe-rs`'s CUDA backend targets ~1 ms per PBS op, which would bring the same model to under 1 second.
 
 ## License
 
