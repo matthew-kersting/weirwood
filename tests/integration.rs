@@ -216,18 +216,18 @@ fn regression_predict_proba_is_identity() {
 // ---------------------------------------------------------------------------
 // UBJ end-to-end tests
 //
-// Fixtures were produced by XGBoost's Python API and committed to the repo.
-// The model was trained on a simple binary-classification dataset separable
-// on feature[0] with a threshold near 0.5.
+// Fixtures were produced by benchmarks/train_model.py (100 trees, max_depth=8,
+// seed=42).  Labels are determined by feature[0] > 0.5, so feature[1] has no
+// effect on predictions.
 //
 // Expected probabilities (P(class=1)) verified against XGBoost Python output:
-//   [0.0, 0.0] -> 0.42555749
-//   [0.5, 0.5] -> 0.42555749
-//   [1.0, 1.0] -> 0.57444251
-//   [0.0, 1.0] -> 0.42555749
-//   [1.0, 0.0] -> 0.57444251
-//   [0.3, 0.7] -> 0.42555749
-//   [0.7, 0.3] -> 0.42555749
+//   [0.0, 0.0] -> 0.00041339  (feature[0] <= 0.5 → class 0)
+//   [0.5, 0.5] -> 0.36874765  (near boundary)
+//   [1.0, 1.0] -> 0.99825829  (feature[0] > 0.5  → class 1)
+//   [0.0, 1.0] -> 0.00079738
+//   [1.0, 0.0] -> 0.99664450
+//   [0.3, 0.7] -> 0.00079738
+//   [0.7, 0.3] -> 0.99733967
 // ---------------------------------------------------------------------------
 
 const TRAINED_TEST_VECTORS: &[[f32; 2]] = &[
@@ -241,7 +241,7 @@ const TRAINED_TEST_VECTORS: &[[f32; 2]] = &[
 ];
 
 const TRAINED_EXPECTED_PROBA: &[f32] = &[
-    0.42555749, 0.42555749, 0.57444251, 0.42555749, 0.57444251, 0.42555749, 0.42555749,
+    0.00041339, 0.36874765, 0.99825829, 0.00079738, 0.99664450, 0.00079738, 0.99733967,
 ];
 
 #[test]

@@ -4,14 +4,16 @@
 //!   - weirwood plaintext (Rust)
 //!   - FHE evaluation (weirwood + tfhe-rs, CPU)
 //!
-//! The FHE row reports wall-clock latency for a single inference because
-//! bootstrapping is too expensive for high-iteration averaging.  Plaintext
-//! uses 10,000 iterations to give a stable per-call figure.
+//! FHE latency is averaged over 10 runs.  The stump has 1 internal node so
+//! each inference costs exactly 1 PBS operation (~410 ms on CPU), giving a
+//! total FHE benchmark time of ~4 s.  Plaintext uses 10,000 iterations for a
+//! stable per-call figure.
 //!
 //! Model: single decision stump (`tests/fixtures/stump_regression.json`).
 //!        Depth-1 tree — one TFHE comparison per prediction.
 //!
-//! WARNING: expect ~2–8 min total on CPU.  Always run in release mode:
+//! Expect ~30 s total (keygen ~800 ms + plaintext bench + 10 FHE runs).
+//! Always run in release mode:
 //!
 //! ```sh
 //! cargo run --release --example bench_fhe_stump
@@ -30,7 +32,7 @@ const DEFAULT_MODEL: &str = "tests/fixtures/stump_regression.json";
 const PLAINTEXT_WARMUP: usize = 1_000;
 const PLAINTEXT_ITERS: usize = 10_000;
 // FHE is benchmarked over this many iterations and averaged.
-const FHE_ITERS: usize = 5;
+const FHE_ITERS: usize = 10;
 
 fn main() -> Result<(), weirwood::Error> {
     let model_path = std::env::args()
@@ -123,10 +125,12 @@ fn main() -> Result<(), weirwood::Error> {
     println!("FHE phase breakdown");
     println!("  keygen    : {keygen_ms:.0} ms");
     println!("  encrypt   : {enc_ms:.3} ms");
-    println!(
-        "  inference : {fhe_s:.2} s  (avg over {FHE_ITERS} runs, {} bootstrapping op(s) each)",
-        model.trees.len()
-    );
+    let pbs_ops: usize = model
+        .trees
+        .iter()
+        .map(|t| t.nodes.iter().filter(|n| !n.is_leaf()).count())
+        .sum();
+    println!("  inference : {fhe_s:.2} s  (avg over {FHE_ITERS} runs, {pbs_ops} PBS op(s) each)");
     println!("  decrypt   : {dec_ms:.3} ms");
     println!();
     println!("Correctness check");

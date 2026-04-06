@@ -25,7 +25,8 @@
 //! Model: single decision stump — feature[0] ≤ 1.5 → leaf −0.5, else +0.5;
 //!        base_score = 1.0, so expected raw scores are 0.5 (left) and 1.5 (right).
 //!
-//! WARNING: FHE key generation takes ~1–3 s and inference ~2–8 min on CPU.
+//! WARNING: FHE key generation takes ~1 s; each inference costs 1 PBS op
+//!          (~410 ms on CPU), so 3 test cases ≈ 2 s of FHE time.
 //!          Run in release mode:
 //!
 //! ```sh

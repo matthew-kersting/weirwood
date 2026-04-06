@@ -1,23 +1,21 @@
 //! Latency benchmark for FHE full-ensemble inference.
 //!
 //! Measures end-to-end FHE inference on the committed `trained_binary.ubj`
-//! fixture (100 trees, depth 3, 2 features, `binary:logistic`) and compares
-//! against the plaintext Rust baseline.
+//! fixture (100 trees, max_depth=8, 177 internal nodes, 2 features,
+//! `binary:logistic`) and compares against the plaintext Rust baseline.
 //!
-//! Because each TFHE comparison requires a full bootstrapping chain (~0.5 s on
-//! CPU) and the model has ~700 internal nodes across 100 trees, a single FHE
-//! inference takes roughly 5–10 minutes on CPU.  The FHE row is therefore
-//! measured as a **single-run** wall-clock time rather than an average.
+//! FHE latency is averaged over 10 runs.  With 177 PBS ops per inference at
+//! ~0.52 s each, expect ~92 s per run and ~15 min total on CPU.
 //! Plaintext uses 10,000 iterations for a stable per-call figure.
 //!
-//! Called by `benchmarks/run_benchmark_fhe_full.sh`; can also be run directly:
+//! Called by `benchmarks/run_benchmark.sh`; can also be run directly:
 //!
 //! ```sh
 //! cargo run --release --example bench_fhe_full
 //! cargo run --release --example bench_fhe_full -- tests/fixtures/trained_binary.ubj
 //! ```
 //!
-//! WARNING: expect ~5–10 min total on CPU. Always run in release mode.
+//! WARNING: expect ~15 min total on CPU. Always run in release mode.
 
 use std::time::Instant;
 
@@ -30,6 +28,7 @@ use weirwood::{
 const DEFAULT_MODEL: &str = "tests/fixtures/trained_binary.ubj";
 const PLAINTEXT_WARMUP: usize = 1_000;
 const PLAINTEXT_ITERS: usize = 10_000;
+const FHE_ITERS: usize = 10;
 
 fn main() -> Result<(), weirwood::Error> {
     let model_path = std::env::args()
@@ -108,16 +107,20 @@ fn main() -> Result<(), weirwood::Error> {
     let enc_ms = t.elapsed().as_secs_f64() * 1000.0;
 
     // -----------------------------------------------------------------------
-    // Server: single FHE inference (too expensive to average multiple runs)
+    // Server: FHE inference averaged over FHE_ITERS runs
     // -----------------------------------------------------------------------
     println!(
-        "Running FHE inference ({total_internal_nodes} PBS ops — expect several minutes) … "
+        "Running FHE inference ({FHE_ITERS} iterations, {total_internal_nodes} PBS ops each) … "
     );
     std::io::Write::flush(&mut std::io::stdout()).ok();
     let t = Instant::now();
-    let enc_score = fhe_eval.predict(&model, &enc_input);
-    let fhe_s = t.elapsed().as_secs_f64();
-    println!("done ({fhe_s:.1} s)");
+    let mut enc_score = fhe_eval.predict(&model, &enc_input);
+    for _ in 1..FHE_ITERS {
+        enc_score = fhe_eval.predict(&model, &enc_input);
+    }
+    let fhe_elapsed = t.elapsed();
+    let fhe_s = fhe_elapsed.as_secs_f64() / FHE_ITERS as f64;
+    println!("done (avg {fhe_s:.1} s over {FHE_ITERS} runs)");
 
     // -----------------------------------------------------------------------
     // Client: decryption and correctness check
@@ -137,14 +140,17 @@ fn main() -> Result<(), weirwood::Error> {
     println!("  keygen    : {keygen_ms:.0} ms");
     println!("  encrypt   : {enc_ms:.3} ms");
     println!(
-        "  inference : {fhe_s:.1} s  (1 run, {total_internal_nodes} PBS ops)"
+        "  inference : {fhe_s:.1} s  (avg {FHE_ITERS} runs, {total_internal_nodes} PBS ops each)"
     );
     println!("  decrypt   : {dec_ms:.3} ms");
     println!();
     println!("Correctness check");
     println!("  plaintext  : {plain_score:.4}");
     println!("  FHE result : {fhe_score:.4}");
-    println!("  |Δ|        : {delta:.4}  (≤ {} expected with SCALE=100)", model.trees.len() as f32 * 0.5 / 100.0);
+    println!(
+        "  |Δ|        : {delta:.4}  (≤ {} expected with SCALE=100)",
+        model.trees.len() as f32 * 0.5 / 100.0
+    );
     println!();
 
     // -----------------------------------------------------------------------
@@ -154,7 +160,7 @@ fn main() -> Result<(), weirwood::Error> {
     println!("BENCH_PLAIN_THRU={plain_thru:.0}");
     println!("BENCH_FHE_KEYGEN_MS={keygen_ms:.0}");
     println!("BENCH_FHE_ENC_MS={enc_ms:.3}");
-    println!("BENCH_FHE_INFER_S={fhe_s:.1}");
+    println!("BENCH_FHE_INFER_S={fhe_s:.2}");
     println!("BENCH_FHE_THRU={:.4}", 1.0 / fhe_s);
     println!("BENCH_FHE_DEC_MS={dec_ms:.3}");
     println!("BENCH_FHE_SCORE={fhe_score:.4}");

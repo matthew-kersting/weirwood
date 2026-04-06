@@ -110,14 +110,14 @@ else:
 
 table = (
     f"<!-- BENCHMARK_TABLE_START -->\n"
-    f"_Last run: {run_date} · model: `{model}` · plaintext: 100,000 iterations · FHE: 1 run_\n\n"
+    f"_Last run: {run_date} · model: `{model}` · plaintext: 100,000 iterations · FHE: avg 10 runs_\n\n"
     f"| Backend                        | Per call        | Throughput (inf/s) | Notes                              |\n"
     f"|--------------------------------|-----------------|--------------------|------------------------------------|\n"
     f"| weirwood (Rust, plaintext)     | {rust_per:>9} ns    | {rust_thru:>18} |                                    |\n"
     f"| XGBoost (Python, plaintext)    | {py_per:>9} ns    | {py_thru:>18} |                                    |\n"
-    f"| weirwood (Rust, **FHE**)       | {fhe_per_display:>9}       | {fhe_thru:>18} | 1 run, {pbs_ops} PBS ops              |\n\n"
+    f"| weirwood (Rust, **FHE**)       | {fhe_per_display:>9}       | {fhe_thru:>18} | avg 10 runs, {pbs_ops} PBS ops        |\n\n"
     f"FHE phase breakdown: keygen {fhe_keygen_ms} ms · encrypt {fhe_enc_ms} ms · "
-    f"inference {fhe_infer_s} s · decrypt {fhe_dec_ms} ms · |Δ plaintext| = {delta}\n"
+    f"inference {fhe_infer_s} s (avg 10) · decrypt {fhe_dec_ms} ms · |Δ plaintext| = {delta}\n"
     f"<!-- BENCHMARK_TABLE_END -->"
 )
 

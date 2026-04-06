@@ -23,19 +23,18 @@
 //!
 //! # Default model
 //!
-//! `tests/fixtures/trained_binary.ubj` — 100 trees, depth 3, 2 features,
-//! objective `binary:logistic`.  Pass any XGBoost JSON or UBJ model file as a
-//! CLI argument, followed by optional feature values:
+//! `tests/fixtures/trained_binary.ubj` — 100 trees, max_depth=8, 177 internal
+//! nodes, 2 features, objective `binary:logistic`.  Pass any XGBoost JSON or
+//! UBJ model file as a CLI argument, followed by optional feature values:
 //!
 //! ```sh
 //! cargo run --release --example fhe_full_inference
 //! cargo run --release --example fhe_full_inference -- path/to/model.ubj 0.7 0.3
 //! ```
 //!
-//! **WARNING:** FHE key generation takes ~1–3 s; each comparison requires a
-//! bootstrapping operation (~0.5 s on CPU).  The default 100-tree depth-3 model
-//! requires ~700 PBS operations per inference — expect ~6 min per feature vector
-//! on CPU.  Always run in release mode.
+//! **WARNING:** FHE key generation takes ~1 s; each PBS operation takes ~0.52 s
+//! on CPU.  The default model (177 PBS ops) takes ~90 s per inference.  With 3
+//! default test cases expect ~270 s (~4.5 min) total.  Always run in release mode.
 
 use std::time::Instant;
 
@@ -115,14 +114,14 @@ fn main() -> Result<(), weirwood::Error> {
     if !cli_features.is_empty() {
         test_cases.push(cli_features);
     } else {
-        // Default probes for trained_binary.ubj (100 trees, depth 3, 2 features).
-        // Model separates on feature[0] near 0.5; feature[1] is unused.
-        //   [0.0, 0.0] → proba ≈ 0.426  (class 0 region)
-        //   [1.0, 1.0] → proba ≈ 0.574  (class 1 region)
-        //   [0.7, 0.3] → proba ≈ 0.426
+        // Default probes for trained_binary.ubj (100 trees, max_depth=8, 2 features).
+        // Model separates on feature[0] > 0.5; feature[1] has no effect.
+        //   [0.0, 0.0] → proba ≈ 0.0004  (class 0 region)
+        //   [1.0, 0.0] → proba ≈ 0.9966  (class 1 region)
+        //   [0.3, 0.7] → proba ≈ 0.0008
         test_cases.push(vec![0.0, 0.0]);
-        test_cases.push(vec![1.0, 1.0]);
-        test_cases.push(vec![0.7, 0.3]);
+        test_cases.push(vec![1.0, 0.0]);
+        test_cases.push(vec![0.3, 0.7]);
     }
 
     // -----------------------------------------------------------------------
