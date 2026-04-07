@@ -176,6 +176,63 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // FHE circuit evaluation: multi-tree ensemble
+    // -----------------------------------------------------------------------
+
+    /// Verify that `FheEvaluator::predict` correctly accumulates scores across
+    /// multiple trees on the `two_trees_binary.json` fixture.
+    ///
+    /// Model layout:
+    ///   Tree 1: feature[0] <= 1.5 → left(-0.3), right(+0.3)
+    ///   Tree 2: feature[1] <= 2.0 → left(-0.2), right(+0.2)
+    ///   base_score = 0.0
+    ///
+    /// Expected raw scores:
+    ///   [0.0, 0.0] → -0.3 + -0.2 = -0.5
+    ///   [2.0, 3.0] →  0.3 +  0.2 =  0.5
+    ///   [0.0, 3.0] → -0.3 +  0.2 = -0.1
+    ///   [2.0, 0.0] →  0.3 + -0.2 =  0.1
+    ///
+    /// Rounding error per tree is at most 0.5/SCALE; with 2 trees and no
+    /// base_score the bound is 2 * 0.5/SCALE = 0.01.
+    #[test]
+    fn fhe_two_trees_matches_plaintext() {
+        use crate::eval::{Evaluator as _, PlaintextEvaluator};
+        use crate::model::WeirwoodTree;
+
+        // epsilon: 2 leaf quantizations, no base_score contribution
+        const EPSILON: f32 = 2.0 * (0.5 / SCALE);
+
+        // --- Client ---
+        let client: ClientContext = ClientContext::generate().unwrap();
+        let server_ctx: ServerContext = client.server_context();
+
+        // --- Server setup ---
+        server_ctx.set_active();
+        let evaluator: FheEvaluator = FheEvaluator::new(server_ctx);
+
+        let model: WeirwoodTree =
+            WeirwoodTree::from_json_file("tests/fixtures/two_trees_binary.json").unwrap();
+
+        let test_cases: &[[f32; 2]] = &[
+            [0.0, 0.0], // both left  → -0.5
+            [2.0, 3.0], // both right → +0.5
+            [0.0, 3.0], // left, right → -0.1
+            [2.0, 0.0], // right, left → +0.1
+        ];
+
+        for features in test_cases {
+            let features_vec: Vec<f32> = features.to_vec();
+            let plaintext_score: f32 = PlaintextEvaluator.predict(&model, &features_vec);
+            let encrypted_input: EncryptedInput = client.encrypt(&features_vec);
+            let encrypted_score: EncryptedScore = evaluator.predict(&model, &encrypted_input);
+            let fhe_score: f32 = client.decrypt_score(&encrypted_score);
+
+            approx::assert_abs_diff_eq!(fhe_score, plaintext_score, epsilon = EPSILON);
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Key separation: a different private key cannot decrypt the ciphertext
     // -----------------------------------------------------------------------
 
