@@ -89,8 +89,7 @@ pub type EncryptedScore = tfhe::FheInt32;
 /// // --- "Send server_ctx and ciphertext to the server" ---
 ///
 /// // --- Server ---
-/// server_ctx.set_active();
-/// let evaluator = FheEvaluator::new(server_ctx);
+/// let evaluator = FheEvaluator::new(server_ctx); // installs key on worker threads
 /// let encrypted_score = evaluator.predict(&model, &ciphertext);
 ///
 /// // --- "Send encrypted_score back to the client" ---

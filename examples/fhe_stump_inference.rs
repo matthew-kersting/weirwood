@@ -10,7 +10,7 @@
 //!   4. Decrypts the inference result returned by the server.
 //!
 //!   **Server**
-//!   5. Installs the server key (`ServerContext::set_active`).
+//!   5. Creates an `FheEvaluator` (installs the server key on worker threads).
 //!   6. Evaluates the XGBoost stump entirely in FHE — it never sees
 //!      plaintext features or the score.
 //!
@@ -82,7 +82,7 @@ fn main() -> Result<(), weirwood::Error> {
     // -----------------------------------------------------------------------
     // Server setup
     // -----------------------------------------------------------------------
-    server_ctx.set_active();
+    server_ctx.set_active(); // install key on the calling thread (worker threads get it via start_handler)
     let evaluator = FheEvaluator::new(server_ctx);
 
     // -----------------------------------------------------------------------
