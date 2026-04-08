@@ -142,8 +142,11 @@ mod tests {
         let client: ClientContext = ClientContext::generate().unwrap();
         let server_ctx: ServerContext = client.server_context();
 
-        // --- Server setup ---
+        // Install the server key on the calling thread; FheEvaluator::new installs
+        // it on worker threads via start_handler.
         server_ctx.set_active();
+
+        // --- Server setup ---
         let evaluator: FheEvaluator = FheEvaluator::new(server_ctx);
 
         let model: WeirwoodTree =
@@ -207,8 +210,11 @@ mod tests {
         let client: ClientContext = ClientContext::generate().unwrap();
         let server_ctx: ServerContext = client.server_context();
 
-        // --- Server setup ---
+        // Install the server key on the calling thread; FheEvaluator::new installs
+        // it on worker threads via start_handler.
         server_ctx.set_active();
+
+        // --- Server setup ---
         let evaluator: FheEvaluator = FheEvaluator::new(server_ctx);
 
         let model: WeirwoodTree =

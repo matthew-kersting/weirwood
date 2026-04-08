@@ -4,7 +4,7 @@ Privacy-preserving XGBoost inference via Fully Homomorphic Encryption, written i
 
 Load a trained XGBoost model, encrypt a feature vector on the client, and evaluate the entire boosted tree ensemble on ciphertext. The server computes the prediction without ever seeing the input data.
 
-**Status:** Model loading, plaintext inference, and FHE inference are all working. The FHE evaluator supports multi-tree ensembles of arbitrary depth, validated on a 100-tree `binary:logistic` model with 177 internal nodes. Results match plaintext within fixed-point rounding error (`N × 0.5/SCALE` accumulated over N trees; ±0.50 worst-case for 100 trees with `SCALE=100`, observed ≈ 0.017 on the benchmark fixture). Sigmoid and softmax activations are applied client-side on the decrypted raw score.
+**Status:** Model loading, plaintext inference, and FHE inference are all working. The FHE evaluator supports multi-tree ensembles of arbitrary depth with Rayon tree-level parallelism, validated on a 100-tree `binary:logistic` model with 177 internal nodes (~64 s per inference on CPU, avg 10 runs). Results match plaintext within fixed-point rounding error (`N × 0.5/SCALE` accumulated over N trees; ±0.50 worst-case for 100 trees with `SCALE=100`, observed ≈ 0.017 on the benchmark fixture). Sigmoid and softmax activations are applied client-side on the decrypted raw score.
 
 ## How it works
 
@@ -89,7 +89,7 @@ let ciphertext = client.encrypt(&features);
 // --- "Send server_ctx and ciphertext to the inference server" ---
 
 // --- Server ---
-server_ctx.set_active();                        // install server key on thread
+// FheEvaluator::new installs the server key on its Rayon worker threads.
 let evaluator = FheEvaluator::new(server_ctx);
 let encrypted_score = evaluator.predict(&model, &ciphertext);
 
@@ -163,29 +163,29 @@ max_depth=8, 177 internal nodes, 2 features, `binary:logistic`).
 Run `./benchmarks/run_benchmark.sh` to regenerate on your machine.
 
 <!-- BENCHMARK_TABLE_START -->
-_Last run: 2026-04-06 · model: `tests/fixtures/trained_binary.ubj` · plaintext: 100,000 iterations · FHE: avg 10 runs_
+_Last run: 2026-04-07 · model: `tests/fixtures/trained_binary.ubj` · plaintext: 100,000 iterations · FHE: avg 10 runs_
 
 | Backend                        | Per call        | Throughput (inf/s) | Notes                              |
 |--------------------------------|-----------------|--------------------|------------------------------------|
-| weirwood (Rust, plaintext)     |     252.7 ns    |            3957400 |                                    |
-| XGBoost (Python, plaintext)    |   79344.4 ns    |              12603 |                                    |
-| weirwood (Rust, **FHE**)       |   1.5 min       |             0.0109 | avg 10 runs, 177 PBS ops        |
+| weirwood (Rust, plaintext)     |     205.7 ns    |            4862404 |                                    |
+| XGBoost (Python, plaintext)    |  111711.7 ns    |               8952 |                                    |
+| weirwood (Rust, **FHE**)       |   1.1 min       |             0.0156 | avg 10 runs, 177 PBS ops        |
 
-FHE phase breakdown: keygen 793 ms · encrypt 1.702 ms · inference 91.80 s (avg 10) · decrypt 0.029 ms · |Δ plaintext| = 0.0166
+FHE phase breakdown: keygen 743 ms · encrypt 1.559 ms · inference 64.23 s (avg 10) · decrypt 0.030 ms · |Δ plaintext| = 0.0166
 <!-- BENCHMARK_TABLE_END -->
 
 ## FHE Stump Benchmark
 
 End-to-end FHE inference on the single decision stump (`stump_regression.json`,
 depth 1, 1 tree, 1 PBS op per inference).  FHE latency is the average of 10
-runs (~410 ms each); plaintext uses 10,000 iterations for a stable per-call
+runs (~1.1 s each); plaintext uses 10,000 iterations for a stable per-call
 figure.
 
 Run `./benchmarks/run_benchmark_stump.sh` to regenerate on your machine
 (expect ~30 s total).
 
 <!-- FHE_STUMP_TABLE_START -->
-_Last run: 2026-04-06 · model: `tests/fixtures/stump_regression.json` · stump (depth 1, 1 tree)_
+_Last run: 2026-04-07 · model: `tests/fixtures/stump_regression.json` · stump (depth 1, 1 tree)_
 
 > **Note:** FHE latency is the average of 10 bootstrapping runs;
 > plaintext throughput uses 10,000 iterations.
@@ -193,20 +193,19 @@ _Last run: 2026-04-06 · model: `tests/fixtures/stump_regression.json` · stump 
 
 | Backend                        | Per call          | Throughput (inf/s) | Notes                          |
 |--------------------------------|-------------------|--------------------|--------------------------------|
-| weirwood (Rust, plaintext)     |      4.7 ns      |          213533770 |                                |
-| XGBoost (Python, plaintext)    |  48327.5 ns      |              20692 |                                |
-| weirwood (Rust, **FHE**)       |      410 ms      |               2.44 | avg 10 runs, 1 PBS op each     |
+| weirwood (Rust, plaintext)     |      7.1 ns      |          141386721 |                                |
+| XGBoost (Python, plaintext)    | 1259886.1 ns      |                794 |                                |
+| weirwood (Rust, **FHE**)       |     1130 ms      |               0.89 | avg 10 runs, 1 PBS op each     |
 
-FHE phase breakdown: keygen 752 ms · encrypt 0.791 ms · inference 0.41 s (avg 10) · decrypt 0.020 ms · |Δ plaintext| = 0.0000
+FHE phase breakdown: keygen 1366 ms · encrypt 1.785 ms · inference 1.13 s (avg 10) · decrypt 0.034 ms · |Δ plaintext| = 0.0000
 <!-- FHE_STUMP_TABLE_END -->
 
 ## Performance notes
 
-Each tree node comparison requires one TFHE programmable-bootstrapping operation. On CPU with `tfhe-rs`, each PBS call takes ~410–520 ms single-threaded (measured: 410 ms on the stump, 92 s / 177 ops = 520 ms on the full model), so inference latency scales linearly with the number of internal nodes evaluated. All nodes are visited obliviously regardless of the actual path taken. The committed 100-tree fixture has 177 internal nodes, giving ~92 s per inference.
+Each tree node comparison requires one TFHE programmable-bootstrapping operation. On CPU with `tfhe-rs`, each PBS call takes ~1.1 s single-threaded (measured on the stump). The 100-tree ensemble (177 PBS ops) runs in ~64 s with Rayon tree-level parallelism — a ~1.4× speedup over serial execution. All nodes are visited obliviously regardless of the actual path taken.
 
-The two primary optimization targets for v0.3:
-- **Rayon parallelization** — nodes across trees are independent; `tfhe-rs` exposes thread-safe bootstrapping. Parallelizing across trees would reduce latency proportionally to available cores.
-- **GPU acceleration** — `tfhe-rs`'s CUDA backend targets ~1 ms per PBS op, which would reduce the 177-node model from ~90 s to under 1 s.
+`FheEvaluator` uses a dedicated Rayon thread pool so trees are evaluated in parallel; the speedup scales with available cores.  The primary remaining optimization target for v0.3:
+- **GPU acceleration** — `tfhe-rs`'s CUDA backend targets ~1 ms per PBS op, which would reduce the 177-node model from ~64 s to under 1 s.
 
 ## License
 

@@ -1,5 +1,6 @@
 //! FHE circuit evaluator — runs XGBoost inference entirely in FHE.
 
+use rayon::prelude::*;
 use tfhe::prelude::*;
 use tfhe::{FheInt16, FheInt32};
 
@@ -30,11 +31,11 @@ use super::server::ServerContext;
 ///
 /// let client = ClientContext::generate()?;
 /// let server_ctx = client.server_context();
-/// server_ctx.set_active();
 ///
 /// let model = WeirwoodTree::from_json_file("model.json")?;
 /// let ciphertext = client.encrypt(&[1.5_f32, 0.3]);
 ///
+/// // FheEvaluator::new installs the server key on its worker threads.
 /// let evaluator = FheEvaluator::new(server_ctx);
 /// let encrypted_score = evaluator.predict(&model, &ciphertext);
 ///
@@ -44,15 +45,35 @@ use super::server::ServerContext;
 pub struct FheEvaluator {
     // ServerContext holds only the ServerKey — no private key material.
     _ctx: ServerContext,
+    // Dedicated Rayon thread pool for parallel tree evaluation.  Using a
+    // private pool (rather than the global one) lets us install the server
+    // key on exactly these threads at construction time, avoiding interference
+    // between concurrent evaluators that hold different server keys.
+    thread_pool: rayon::ThreadPool,
 }
 
 impl FheEvaluator {
     /// Create a new evaluator from a [`ServerContext`].
     ///
-    /// The server key must already be installed via [`ServerContext::set_active`]
-    /// on the calling thread before [`predict`](Self::predict) is invoked.
+    /// Builds a dedicated Rayon thread pool and installs the server key on
+    /// every worker thread.  The one-time key broadcast happens here so that
+    /// [`predict`](Self::predict) calls pay no per-call broadcast overhead.
     pub fn new(ctx: ServerContext) -> Self {
-        FheEvaluator { _ctx: ctx }
+        // Clone the server key so the start_handler can own it.  The handler
+        // is called once per worker thread the moment it is spawned (Rayon
+        // creates threads lazily), installing the key into that thread's local
+        // storage.  This is the correct hook for thread-local initialization
+        // because broadcast() targets only already-running threads, which may
+        // be zero at construction time.
+        let sk = ctx.server_key.clone();
+        let thread_pool = rayon::ThreadPoolBuilder::new()
+            .start_handler(move |_| tfhe::set_server_key(sk.clone()))
+            .build()
+            .expect("failed to build Rayon thread pool for FHE evaluation");
+        FheEvaluator {
+            _ctx: ctx,
+            thread_pool,
+        }
     }
 }
 
@@ -62,10 +83,10 @@ impl FheEvaluator {
 
 /// Recursively evaluate one tree node in FHE, returning a scaled `FheInt16`.
 ///
-/// Internal nodes perform a bootstrapped comparison between an encrypted
-/// feature and a plaintext threshold, then use `if_then_else` to select the
-/// left or right sub-result.  Leaf nodes return a trivially-encrypted
-/// (unrandomised) constant — the scaled leaf weight.
+/// Internal nodes perform a bootstrapped comparison (~1.1 s per PBS op on CPU)
+/// between an encrypted feature and a plaintext threshold, then use
+/// `if_then_else` to select the left or right sub-result.  Leaf nodes return a
+/// trivially-encrypted (unrandomised) constant — the scaled leaf weight.
 ///
 /// The return type is `FheInt16` rather than `FheInt32` because
 /// `FheBool::if_then_else` on 32-bit ciphertexts triggers an integer overflow
@@ -111,29 +132,39 @@ impl Evaluator for FheEvaluator {
 
     /// Run XGBoost inference over an encrypted feature vector.
     ///
-    /// Each tree is evaluated by recursively applying bootstrapped comparisons
-    /// and oblivious muxes.  Tree scores are accumulated
-    /// into a single [`EncryptedScore`] together with the scaled `base_score`.
+    /// Trees are evaluated in parallel using the evaluator's dedicated Rayon
+    /// thread pool — each tree is independent, so bootstrapped comparisons
+    /// across trees run concurrently.  Tree scores are then accumulated
+    /// sequentially into a single [`EncryptedScore`] together with the scaled
+    /// `base_score` (accumulation is cheap: only homomorphic additions, no PBS).
     ///
-    /// The server key must be installed via [`ServerContext::set_active`] on
-    /// the calling thread before this method is invoked.
+    /// The server key must be installed on the **calling thread** via
+    /// [`ServerContext::set_active`] before this method is invoked.  Worker
+    /// threads in the evaluator's private pool have the key installed
+    /// automatically at construction time.
     fn predict(
         &self,
         weirwood_tree: &WeirwoodTree,
         encrypted_features: &EncryptedInput,
     ) -> EncryptedScore {
-        // Start with the scaled base_score as a trivial ciphertext so that
-        // subsequent additions stay in the same ciphertext domain.
+        // Evaluate all trees in parallel inside the evaluator's private thread
+        // pool.  The calling thread also participates in task execution via
+        // install(), so it must have the server key set (see set_active()).
+        // Pool worker threads already have it from the start_handler in new().
+        let tree_scores: Vec<FheInt16> = self.thread_pool.install(|| {
+            weirwood_tree
+                .trees
+                .par_iter()
+                .map(|tree| eval_node(tree, 0, encrypted_features))
+                .collect()
+        });
+
         let base_scaled = (weirwood_tree.base_score * SCALE)
             .round()
             .clamp(i32::MIN as f32, i32::MAX as f32) as i32;
         let mut total: FheInt32 = FheInt32::encrypt_trivial(base_scaled);
-
-        for tree in &weirwood_tree.trees {
-            // eval_node returns FheInt16; widen before adding to the i32 accumulator.
-            let tree_score: FheInt16 = eval_node(tree, 0, encrypted_features);
-            let tree_score_i32: FheInt32 = FheInt32::cast_from(tree_score);
-            total += tree_score_i32;
+        for score in tree_scores {
+            total += FheInt32::cast_from(score);
         }
         total
     }

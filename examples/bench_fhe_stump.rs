@@ -5,14 +5,14 @@
 //!   - FHE evaluation (weirwood + tfhe-rs, CPU)
 //!
 //! FHE latency is averaged over 10 runs.  The stump has 1 internal node so
-//! each inference costs exactly 1 PBS operation (~410 ms on CPU), giving a
-//! total FHE benchmark time of ~4 s.  Plaintext uses 10,000 iterations for a
+//! each inference costs exactly 1 PBS operation (~1.1 s on CPU), giving a
+//! total FHE benchmark time of ~11 s.  Plaintext uses 10,000 iterations for a
 //! stable per-call figure.
 //!
 //! Model: single decision stump (`tests/fixtures/stump_regression.json`).
 //!        Depth-1 tree — one TFHE comparison per prediction.
 //!
-//! Expect ~30 s total (keygen ~800 ms + plaintext bench + 10 FHE runs).
+//! Expect ~25 s total (keygen ~1.4 s + plaintext bench + 10 FHE runs).
 //! Always run in release mode:
 //!
 //! ```sh
@@ -84,7 +84,7 @@ fn main() -> Result<(), weirwood::Error> {
     // -----------------------------------------------------------------------
     // Server setup
     // -----------------------------------------------------------------------
-    server_ctx.set_active();
+    server_ctx.set_active(); // install key on the calling thread (worker threads get it via start_handler)
     let fhe_eval = FheEvaluator::new(server_ctx);
 
     // -----------------------------------------------------------------------

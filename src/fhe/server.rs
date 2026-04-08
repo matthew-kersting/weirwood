@@ -6,8 +6,10 @@
 //! compromise input privacy.
 //!
 //! In a real deployment the client serializes this context and sends it to the
-//! server once; the server installs it via [`ServerContext::set_active`] and
-//! then evaluates any number of encrypted inputs.
+//! server once; the server creates an [`FheEvaluator`] which installs the key
+//! on its Rayon worker threads automatically.
+//!
+//! [`FheEvaluator`]: super::evaluator::FheEvaluator
 //!
 //! [`ServerKey`]: tfhe::ServerKey
 

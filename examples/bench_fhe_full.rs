@@ -4,8 +4,8 @@
 //! fixture (100 trees, max_depth=8, 177 internal nodes, 2 features,
 //! `binary:logistic`) and compares against the plaintext Rust baseline.
 //!
-//! FHE latency is averaged over 10 runs.  With 177 PBS ops per inference at
-//! ~0.52 s each, expect ~92 s per run and ~15 min total on CPU.
+//! FHE latency is averaged over 10 runs.  With 177 PBS ops per inference and
+//! Rayon tree-level parallelism, expect ~64 s per run and ~11 min total on CPU.
 //! Plaintext uses 10,000 iterations for a stable per-call figure.
 //!
 //! Called by `benchmarks/run_benchmark.sh`; can also be run directly:
@@ -15,7 +15,7 @@
 //! cargo run --release --example bench_fhe_full -- tests/fixtures/trained_binary.ubj
 //! ```
 //!
-//! WARNING: expect ~15 min total on CPU. Always run in release mode.
+//! WARNING: expect ~11 min total on CPU. Always run in release mode.
 
 use std::time::Instant;
 
@@ -96,7 +96,7 @@ fn main() -> Result<(), weirwood::Error> {
     // -----------------------------------------------------------------------
     // Server setup
     // -----------------------------------------------------------------------
-    server_ctx.set_active();
+    server_ctx.set_active(); // install key on the calling thread (worker threads get it via start_handler)
     let fhe_eval = FheEvaluator::new(server_ctx);
 
     // -----------------------------------------------------------------------

@@ -32,9 +32,9 @@
 //! cargo run --release --example fhe_full_inference -- path/to/model.ubj 0.7 0.3
 //! ```
 //!
-//! **WARNING:** FHE key generation takes ~1 s; each PBS operation takes ~0.52 s
-//! on CPU.  The default model (177 PBS ops) takes ~90 s per inference.  With 3
-//! default test cases expect ~270 s (~4.5 min) total.  Always run in release mode.
+//! **WARNING:** FHE key generation takes ~1 s; with Rayon tree-level parallelism
+//! the default model (177 PBS ops, 100 trees) takes ~64 s per inference.  With 3
+//! default test cases expect ~200 s (~3 min) total.  Always run in release mode.
 
 use std::time::Instant;
 
@@ -104,7 +104,7 @@ fn main() -> Result<(), weirwood::Error> {
     // -----------------------------------------------------------------------
     // Server setup
     // -----------------------------------------------------------------------
-    server_ctx.set_active();
+    server_ctx.set_active(); // install key on the calling thread (worker threads get it via start_handler)
     let evaluator = FheEvaluator::new(server_ctx);
 
     // -----------------------------------------------------------------------
