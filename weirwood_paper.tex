@@ -132,7 +132,7 @@ where $b$ is a global base score and each $f_k$ routes the input vector $\mathbf
 
 \subsection{Fully Homomorphic Encryption}
 
-FHE \cite{gentry} supports arbitrary computation on ciphertexts, based on the hardness of Ring Learning With Errors (RLWE), believed hard for both classical and quantum computers. The central challenge is noise growth: additions accumulate error linearly and multiplications amplify it. Bootstrapping \cite{gentry} resets noise by homomorphically evaluating the decryption circuit, but is computationally expensive.
+FHE \cite{gentry} supports arbitrary computation on ciphertexts, based on the hardness of Ring Learning With Errors (RLWE) \cite{regev}, believed hard for both classical and quantum computers. The central challenge is noise growth: additions accumulate error linearly and multiplications amplify it. Bootstrapping \cite{gentry} resets noise by homomorphically evaluating the decryption circuit, but is computationally expensive.
 
 \textit{weirwood} uses the TFHE scheme \cite{tfhe}, which operates over the real torus $\mathbb{T} = \mathbb{R}/\mathbb{Z}$. Its key contribution is \textit{programmable bootstrapping} (PBS): rather than being purely a noise-reduction step, bootstrapping simultaneously evaluates an arbitrary function encoded as a lookup table (LUT) via blind rotation \cite{fhew}---a homomorphic operation that rotates a test polynomial by a secret-key-encoded shift, reading off the function value without revealing the input. Cost is $O(n \log n)$ per PBS call where $n$ is the polynomial degree (1024 or 2048 for 128-bit security).
 
@@ -227,7 +227,7 @@ Sigmoid and softmax activations are applied client-side in plaintext after decry
 
 The FHE circuit is evaluated entirely in the integer domain. The only source of error is fixed-point rounding: each encoding introduces at most $\pm 0.0005$ in the original domain, and worst-case accumulated error over 100 trees is $\pm 0.05$. The observed delta on the benchmark fixture is $\approx 0.0166$, consistent with partial error cancellation across trees.
 
-The comparison circuit itself introduces no approximation. TFHE programmable bootstrapping evaluates the Heaviside function exactly as a LUT, unlike BFV or BGV schemes which require polynomial approximation of comparisons \cite{tfheDive}. The oblivious evaluation strategy requires that both subtrees be computed at every internal node regardless of the comparison result, ensuring the execution trace is independent of the input and no branch information is leaked through timing or access patterns.
+The comparison circuit itself introduces no approximation. TFHE programmable bootstrapping evaluates the Heaviside function exactly as a LUT, unlike BFV or BGV schemes which require polynomial approximation of comparisons \cite{TFHE-rs}. The oblivious evaluation strategy requires that both subtrees be computed at every internal node regardless of the comparison result, ensuring the execution trace is independent of the input and no branch information is leaked through timing or access patterns.
 
 \subsection{Performance}
 
@@ -250,13 +250,13 @@ weirwood (Rust, \textbf{FHE}) & 64.2 s         & 0.0156        & avg 10 runs, 52
 
 FHE phase breakdown: key generation 743 ms, encryption 1.6 ms, inference 64.2 s (525 PBS ops), decryption 0.03 ms. A single-stump fixture (1 tree, 1 PBS op) produces $\approx 1.13$ s, confirming the per-PBS floor.
 
-Rayon tree-level parallelism on 12 cores yields approximately a $9\times$ speedup over the expected serial time of $\approx 578$ s ($525 \text{ ops} \times 1.1$ s/op), rather than the theoretical $12\times$ maximum. The limited gain reflects the memory-bandwidth bottleneck of PBS operations: each bootstrapping call performs large Number Theoretic Transform (NTT) polynomial operations whose combined working set saturates L3 cache and DRAM bandwidth when executed in parallel \cite{tfheDive}. Each tree has on average 5.25 internal nodes (maximum path depth 6), so each Rayon task consists of up to 6 sequential PBS operations---sufficient work to amortize scheduling overhead, but insufficient to hide memory latency.
+Rayon tree-level parallelism on 12 cores yields approximately a $9\times$ speedup over the expected serial time of $\approx 578$ s ($525 \text{ ops} \times 1.1$ s/op), rather than the theoretical $12\times$ maximum. The limited gain reflects the memory-bandwidth bottleneck of PBS operations: each bootstrapping call performs large Number Theoretic Transform (NTT) polynomial operations whose combined working set saturates L3 cache and DRAM bandwidth when executed in parallel \cite{TFHE-rs}. Each tree has on average 5.25 internal nodes (maximum path depth 6), so each Rayon task consists of up to 6 sequential PBS operations---sufficient work to amortize scheduling overhead, but insufficient to hide memory latency.
 
-The primary remaining performance target is GPU acceleration. The \texttt{tfhe-rs} CUDA backend targets $\approx 1$ ms per PBS operation \cite{tfheDive}, which would reduce the 525-node model from $\approx 64$ s to under 1 s total inference latency.
+The primary remaining performance target is GPU acceleration. The \texttt{tfhe-rs} CUDA backend targets $\approx 1$ ms per PBS operation \cite{TFHE-rs}, which would reduce the 525-node model from $\approx 64$ s to under 1 s total inference latency.
 
 \subsection{Security}
 
-The security of \textit{weirwood} rests on the RLWE assumption at 128-bit security using the default parameters from \texttt{tfhe-rs} \cite{tfheDive}. The best known attacks use lattice reduction via the Block Korkine--Zolotarev (BKZ) algorithm, which requires $2^{128}$ operations, making the scheme secure against both classical and quantum adversaries.
+The security of \textit{weirwood} rests on the RLWE assumption at 128-bit security \cite{regev} using the default parameters from \texttt{tfhe-rs} \cite{TFHE-rs}. The best known attacks use lattice reduction via the Block Korkine--Zolotarev (BKZ) algorithm, which requires $2^{128}$ operations, making the scheme secure against both classical and quantum adversaries.
 
 The server receives a \texttt{ServerContext} containing only the evaluation key, which provides no decryption capability. Under RLWE, the evaluation key is computationally indistinguishable from random; the server learns nothing about plaintext feature values or the decrypted score. The oblivious multiplexer at each node ensures the branch taken is not revealed, as \texttt{eval\_node} unconditionally recurses into both children at every internal node.
 
@@ -299,6 +299,12 @@ I.\ Chillotti, N.\ Gama, M.\ Georgieva, and M.\ Izabachene,
 \textit{Journal of Cryptology}, vol.\ 33, 2020, pp.\ 34--91.
 \url{https://doi.org/10.1007/s00145-019-09319-x}
 
+\bibitem{regev}
+O. Regev,
+``On Lattices, Learning with Errors, Random Linear Codes, and Cryptography,''
+\textit{Journal of the ACM}, vol.\ 56, art. 34, 2009, pp.\ 1--40.
+\url{https://doi.org/10.1145/1568318.1568324}
+
 \bibitem{ckks}
 J.\ H.\ Cheon, A.\ Kim, M.\ Kim, and Y.\ Song,
 ``Homomorphic Encryption for Arithmetic of Approximate Numbers,''
@@ -313,17 +319,17 @@ in \textit{Advances in Cryptology --- EUROCRYPT 2015},
 Springer, 2015, pp.\ 617--640.
 \url{https://doi.org/10.1007/978-3-662-46800-5_24}
 
-\bibitem{tfheDive}
-C.\ Boura, N.\ Gama, M.\ Georgieva, and D.\ Jetchev,
-``TFHE Deep Dive,''
-IACR ePrint Archive, Report 2021/315, 2021.
-\url{https://ia.cr/2021/315}
-
 \bibitem{ubj}
 XGBoost Contributors,
 ``UBJ --- Universal Binary JSON Model Serialization,''
 XGBoost Documentation, 2022.
 \url{https://xgboost.readthedocs.io/en/stable/tutorials/saving_model.html}
+
+\bibitem{TFHE-rs}
+Zama,
+``TFHE-rs: A Pure Rust Implementation of the TFHE Scheme for Boolean and Integer Arithmetics Over Encrypted Data,''
+GitHub, 2022.
+\url{https://github.com/zama-ai/tfhe-rs}
 
 \bibitem{rayon}
 Rayon Contributors,
