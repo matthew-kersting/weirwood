@@ -39,18 +39,18 @@ mod tests {
     /// fixed-point rounding error.
     fn assert_round_trip(client: &ClientContext, original: f32) {
         // Encryption uses the private ClientKey.
-        let ciphertext: Vec<tfhe::FheInt<tfhe::FheInt16Id>> = client.encrypt(&[original]);
+        let ciphertext: EncryptedInput = client.encrypt(&[original]);
 
         // Decryption also uses the private ClientKey.
         // The server never sees this step.
-        let raw: i16 = ciphertext[0].decrypt(&client.client_key);
+        let raw: i32 = ciphertext[0].decrypt(&client.client_key);
         let recovered: f32 = raw as f32 / SCALE;
 
         // The expected decoded value is the rounded fixed-point representation,
         // not necessarily `original` exactly.
         let expected: f32 = (original * SCALE)
             .round()
-            .clamp(i16::MIN as f32, i16::MAX as f32) as i16 as f32
+            .clamp(i32::MIN as f32, i32::MAX as f32) as i32 as f32
             / SCALE;
 
         approx::assert_abs_diff_eq!(recovered, expected, epsilon = 1e-6);
@@ -68,10 +68,10 @@ mod tests {
         // (e.g. age=35, income=0.72 normalised, debt_ratio=-0.15, score=320.0).
         let client: ClientContext = ClientContext::generate().unwrap();
         let features: &[f32] = &[35.0, 0.72, -0.15, 3.20];
-        let ciphertext: Vec<tfhe::FheInt<tfhe::FheInt16Id>> = client.encrypt(features);
+        let ciphertext: EncryptedInput = client.encrypt(features);
 
         for (i, &original) in features.iter().enumerate() {
-            let raw: i16 = ciphertext[i].decrypt(&client.client_key);
+            let raw: i32 = ciphertext[i].decrypt(&client.client_key);
             let recovered = raw as f32 / SCALE;
             approx::assert_abs_diff_eq!(recovered, original, epsilon = FIXED_POINT_EPSILON + 1e-6);
         }
@@ -105,16 +105,16 @@ mod tests {
 
     #[test]
     fn fixed_point_rounding_within_one_ulp() {
-        // A value with sub-cent precision (1.234) should decode as 1.23,
-        // not 1.234 — the third decimal is lost in encoding.
+        // A value with sub-milli precision (1.2347) should decode as 1.235,
+        // not 1.2347 — the fourth decimal is lost in encoding.
         let client: ClientContext = ClientContext::generate().unwrap();
 
-        let ciphertext: Vec<tfhe::FheInt<tfhe::FheInt16Id>> = client.encrypt(&[1.234]);
-        let raw: i16 = ciphertext[0].decrypt(&client.client_key);
+        let ciphertext: EncryptedInput = client.encrypt(&[1.2347]);
+        let raw: i32 = ciphertext[0].decrypt(&client.client_key);
         let recovered: f32 = raw as f32 / SCALE;
 
-        // 1.234 * 100 = 123.4 → rounds to 123 → 1.23
-        approx::assert_abs_diff_eq!(recovered, 1.23, epsilon = 1e-6);
+        // 1.2347 * 1000 = 1234.7 → rounds to 1235 → 1.235
+        approx::assert_abs_diff_eq!(recovered, 1.235, epsilon = 1e-6);
     }
 
     // -----------------------------------------------------------------------
@@ -251,19 +251,19 @@ mod tests {
         let client_alice: ClientContext = ClientContext::generate().unwrap();
         let client_bob: ClientContext = ClientContext::generate().unwrap();
 
-        let original: i16 = 42; // scaled value
-        let ciphertext: tfhe::FheInt<tfhe::FheInt16Id> =
-            tfhe::FheInt16::encrypt(original, &client_alice.client_key);
+        let original: f32 = 0.42; // a feature value
+        let ciphertext: EncryptedInput = client_alice.encrypt(&[original]);
 
-        let decrypted_by_alice: i16 = ciphertext.decrypt(&client_alice.client_key);
-        let decrypted_by_bob: i16 = ciphertext.decrypt(&client_bob.client_key);
+        let decrypted_by_alice: i32 = ciphertext[0].decrypt(&client_alice.client_key);
+        let decrypted_by_bob: i32 = ciphertext[0].decrypt(&client_bob.client_key);
+        let expected: i32 = (original * SCALE).round() as i32;
 
         assert_eq!(
-            decrypted_by_alice, original,
+            decrypted_by_alice, expected,
             "alice should recover her own ciphertext"
         );
         assert_ne!(
-            decrypted_by_bob, original,
+            decrypted_by_bob, expected,
             "bob's key should not decrypt alice's ciphertext \
              (collision negligible with 128-bit security)"
         );

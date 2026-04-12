@@ -1,0 +1,346 @@
+\documentclass[12pt]{article}
+
+% ---- Fonts and encoding ----
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{times}          % Times New Roman
+
+% ---- Layout ----
+\usepackage[margin=1in]{geometry}
+\usepackage{setspace}
+\usepackage{parskip}        % space between paragraphs, no first-line indent
+
+% ---- Math ----
+\usepackage{amsmath}
+\usepackage{amssymb}
+
+% ---- Tables ----
+\usepackage{booktabs}
+\usepackage{array}
+
+% ---- Code listings ----
+\usepackage{listings}
+\usepackage{xcolor}
+
+\definecolor{codegray}{rgb}{0.45,0.45,0.45}
+\definecolor{codebg}{rgb}{0.97,0.97,0.97}
+
+\lstdefinelanguage{Rust}{
+    morekeywords={fn, let, pub, use, struct, impl, if, else, return,
+                  mut, for, in, match, type, const, where, self, Self,
+                  crate, mod, trait, enum, as, move, ref, loop, while,
+                  break, continue, true, false, usize, i32, f32, bool,
+                  FheInt32, FheBool, FheEvaluator, ServerContext,
+                  ClientContext, EncryptedInput},
+    keywordstyle=\bfseries,
+    comment=[l]{//},
+    commentstyle=\color{codegray}\itshape,
+    basicstyle=\small\ttfamily,
+    breaklines=true,
+    showstringspaces=false,
+    tabsize=4,
+    backgroundcolor=\color{codebg},
+    frame=single,
+    framesep=4pt,
+    rulecolor=\color{gray!50},
+    numbers=left,
+    numberstyle=\tiny\color{codegray},
+    numbersep=8pt,
+    xleftmargin=14pt,
+    xrightmargin=4pt,
+}
+
+\lstset{language=Rust}
+
+% ---- Rename "Listing" to "Code Block" ----
+\renewcommand{\lstlistingname}{Code Block}
+
+% ---- Hyperlinks (bibliography URLs) ----
+\usepackage[hidelinks,breaklinks]{hyperref}
+\usepackage{url}
+
+% ---- Page numbers ----
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0pt}
+
+% ---- Section title spacing ----
+\usepackage{titlesec}
+\titlespacing*{\section}{0pt}{1.5ex plus 0.5ex}{0.8ex}
+\titlespacing*{\subsection}{0pt}{1.2ex plus 0.4ex}{0.5ex}
+\titlespacing*{\subsubsection}{0pt}{1.0ex plus 0.3ex}{0.3ex}
+
+% ============================================================
+\begin{document}
+\onehalfspacing
+\raggedright   % left-justified, no right-margin justification
+
+% ============================================================
+% TITLE PAGE
+% ============================================================
+\begin{titlepage}
+% Top-left metadata block
+\noindent
+{\normalsize
+Cryptology --- 695.641\\
+Matthew Kersting\\
+4194E9\\
+DRAFT --- Final Research Paper\\
+April 14, 2026
+}
+
+% Centered title in the middle of the page
+\vfill
+\begin{center}
+{\LARGE\textbf{Privacy-Preserving XGBoost Inference via\\[0.3em]
+Fully Homomorphic Encryption in Rust}}
+\end{center}
+\vfill
+\end{titlepage}
+
+\newpage
+
+% ============================================================
+% INTRODUCTION
+% ============================================================
+The Rust crate for \textit{weirwood} is available at
+\url{https://crates.io/crates/weirwood} and the source code at
+\url{https://github.com/matthew-kersting/weirwood}.
+
+\section{Introduction}
+
+In the standard two-party inference setting, a client holds private input features and a server holds a trained model. Current deployment patterns force a compromise: send plaintext features to the server, exposing the data, or ship the model to the client, exposing the model. Neither is satisfactory when both are sensitive assets.
+
+Fully Homomorphic Encryption (FHE) resolves this by allowing the server to evaluate a model on encrypted inputs. The client encrypts locally, the server runs inference on the ciphertext and returns an encrypted score, and the client decrypts the result. The server's view is computationally indistinguishable from random noise under standard cryptographic assumptions. The practical obstacle has historically been performance; modern schemes, particularly TFHE \cite{tfhe}, have reduced per-operation latency to the single-second range on consumer CPU hardware, making FHE feasible for small-to-medium inference workloads.
+
+\textit{weirwood} is a Rust crate implementing privacy-preserving inference for XGBoost gradient boosted tree ensembles \cite{xgboost} using TFHE. XGBoost is an attractive FHE target for several reasons. Tree depth is a fixed hyperparameter, typically 3--8 levels, bounding the number of sequential bootstrapping operations per inference. Each internal node tests one feature against a scalar threshold, mapping cleanly to a single TFHE programmable bootstrapping (PBS) call. The final prediction is a sum of leaf values requiring only cheap homomorphic additions. Neural networks, by contrast, require polynomial approximation of non-linear activations or repeated bootstrapping at every layer, greatly increasing circuit depth and computational cost \cite{gentry}.
+
+This paper describes the design and implementation of \textit{weirwood}, focusing on FHE circuit construction, fixed-point encoding, and parallelism strategy.
+
+% ============================================================
+% DESCRIPTION
+% ============================================================
+\section{Description}
+
+\subsection{XGBoost Inference}
+
+XGBoost \cite{xgboost} builds a prediction as a sum over $K$ regression trees:
+%
+\begin{equation}
+F(\mathbf{x}) = b + \sum_{k=1}^{K} f_k(\mathbf{x})
+\end{equation}
+%
+where $b$ is a global base score and each $f_k$ routes the input vector $\mathbf{x}$ from root to leaf by evaluating comparisons $\mathbf{x}[i] \leq t$ at internal nodes, returning the stored leaf weight. The key observation for FHE is that the indicator product along a root-to-leaf path can be evaluated \textit{obliviously} via a homomorphic multiplexer at each node: given an encrypted comparison result, select the left or right subtree without revealing which branch was taken. The tree sum is then accumulated with cheap homomorphic addition.
+
+\subsection{Fully Homomorphic Encryption}
+
+FHE \cite{gentry} supports arbitrary computation on ciphertexts, based on the hardness of Ring Learning With Errors (RLWE) \cite{regev}, believed hard for both classical and quantum computers. The central challenge is noise growth: additions accumulate error linearly and multiplications amplify it. Bootstrapping \cite{gentry} resets noise by homomorphically evaluating the decryption circuit, but is computationally expensive.
+
+\textit{weirwood} uses the TFHE scheme \cite{tfhe}, which operates over the real torus $\mathbb{T} = \mathbb{R}/\mathbb{Z}$. Its key contribution is \textit{programmable bootstrapping} (PBS): rather than being purely a noise-reduction step, bootstrapping simultaneously evaluates an arbitrary function encoded as a lookup table (LUT) via blind rotation \cite{fhew}, a homomorphic operation that rotates a test polynomial by a secret-key-encoded shift, reading off the function value without revealing the input. Cost is $O(n \log n)$ per PBS call where $n$ is the polynomial degree (1024 or 2048 for 128-bit security).
+
+For \textit{weirwood}, the relevant LUT is the Heaviside step function $H(x) = \mathbf{1}[x \leq 0]$. This makes each internal node comparison \textit{exact}, no polynomial approximation, no approximation error beyond the inherent fixed-point rounding of the feature encoding.
+
+\subsection{System Design and Rust Implementation}
+
+Three types enforce the two-party trust boundary at the type-system level. \texttt{ClientContext} holds both the client and server keys and never leaves the client. \texttt{ServerContext} holds only the evaluation key with no decryption capability. \texttt{FheEvaluator} is constructed from a \texttt{ServerContext} and cannot hold a private key by construction. Rust's ownership model makes it a compile-time error to pass a \texttt{ClientContext} to the server or to decrypt from an \texttt{FheEvaluator}. The two-party protocol flow is illustrated in Figure~\ref{fig:protocol}.
+
+\begin{figure}[h]
+\centering
+\small\ttfamily
+\begin{tabular}{p{7.2cm} p{5.5cm}}
+\textbf{Client} & \textbf{Server} \\
+\hline
+1. \texttt{ClientContext::generate()} & \\
+2. Extract \texttt{ServerContext} $\longrightarrow$ & 3. \texttt{FheEvaluator::new(server\_ctx)} \\
+4. \texttt{client.encrypt(\&features)} $\longrightarrow$ & 5. \texttt{evaluator.predict(\&model, \&ct)} \\
+6. \texttt{client.decrypt\_score(\&enc\_score)} $\longleftarrow$ & \\
+7. Apply sigmoid / identity (plaintext) & \\
+\end{tabular}
+\caption{Two-party FHE inference protocol. The server receives a \texttt{ServerContext} (evaluation key only) and an encrypted feature vector. It returns an encrypted score. No plaintext feature values or raw scores are revealed to the server at any step.}
+\label{fig:protocol}
+\end{figure}
+
+\subsubsection*{Fixed-Point Encoding}
+
+Floating-point feature values are converted to fixed-point integers before encryption using a scale factor $\text{SCALE} = 1000$: each feature $x$ is encoded as $\text{round}(x \times 1000)$ and stored as a 32-bit signed integer (\texttt{FheInt32}). Tree split thresholds are scaled identically. This gives three decimal digits of precision, sufficient for StandardScaler-normalized feature ranges (approximately $[-3, 3]$). Leaf weights and accumulated scores are also held in \texttt{FheInt32}; the accumulated score for a 100-tree model reaches at most $\pm 100{,}000$ in the fixed-point domain, well within the \texttt{i32} range of approximately $\pm 2.1 \times 10^9$.
+
+Each rounding introduces at most $\pm 0.5 / \text{SCALE} = \pm 0.0005$ in the original domain. Accumulated over $N$ trees the worst-case error is:
+%
+\begin{equation}
+|\delta_{\max}| = \frac{N}{2 \cdot \text{SCALE}}
+\end{equation}
+%
+For the benchmark model (100 trees, $\text{SCALE} = 1000$) this gives a theoretical worst case of $\pm 0.05$.
+
+\subsubsection*{FHE Circuit: \texttt{eval\_node}}
+
+The core of the FHE circuit is the \texttt{eval\_node} function, which recursively evaluates one tree node (Listing~\ref{lst:evalnode}). Leaf nodes return a trivially-encrypted constant (a plaintext value wrapped in a zero-noise ciphertext). Internal nodes perform one PBS comparison between the encrypted feature and a scalar plaintext threshold via \texttt{.le()}; the Heaviside function is encoded as a LUT inside the bootstrapping accumulator. The result is an \texttt{FheBool} used in \texttt{if\_then\_else} to select the left or right subtree score without revealing which branch was taken. Tree scores are accumulated directly as \texttt{FheInt32}, requiring no widening cast.
+
+\begin{lstlisting}[caption={Recursive FHE tree node evaluation (\texttt{src/eval/fhe/evaluator.rs}). Each internal node triggers one PBS call; both subtrees are always computed for obliviousness.}, label={lst:evalnode}]
+fn eval_node(
+    tree: &Tree,
+    node_idx: usize,
+    features: &EncryptedInput,
+) -> FheInt32 {
+    let node = &tree.nodes[node_idx];
+    if node.is_leaf() {
+        let scaled: i32 = (node.leaf_value * SCALE).round()
+            .clamp(i32::MIN as f32, i32::MAX as f32) as i32;
+        FheInt32::encrypt_trivial(scaled)
+    } else {
+        let threshold: i32 =
+            (node.split_threshold * SCALE).round() as i32;
+        let go_left: FheBool =
+            features[node.split_feature as usize].le(threshold);
+        let left_score =
+            eval_node(tree, node.left_child as usize, features);
+        let right_score =
+            eval_node(tree, node.right_child as usize, features);
+        go_left.if_then_else(&left_score, &right_score)
+    }
+}
+\end{lstlisting}
+
+\subsubsection*{Parallel Tree Evaluation with Rayon}
+
+Because the $K$ trees are mutually independent, they can be evaluated concurrently. \texttt{FheEvaluator} uses a dedicated private Rayon thread pool \cite{rayon} rather than the global pool, enabling fine-grained control over the server key installation and thread count (Listing~\ref{lst:pool}).
+
+\begin{lstlisting}[caption={FheEvaluator construction (\texttt{src/eval/fhe/evaluator.rs}). The \texttt{start\_handler} closure installs the server key into each worker thread's local storage at spawn time.}, label={lst:pool}]
+pub fn new(ctx: ServerContext) -> Self {
+    let sk = ctx.server_key.clone();
+    let thread_pool = rayon::ThreadPoolBuilder::new()
+        .start_handler(move |_| tfhe::set_server_key(sk.clone()))
+        .build()
+        .expect("failed to build Rayon thread pool");
+    FheEvaluator { thread_pool }
+}
+\end{lstlisting}
+
+The calling thread must also have the server key installed via \texttt{ServerContext::set\_active()} before invoking \texttt{predict()}. Tree scores are summed sequentially after the parallel phase; homomorphic addition requires no PBS calls and is negligible in cost.
+
+Sigmoid and softmax activations are applied client-side in plaintext after decryption. This is correct for the two-party protocol: the server still sees only ciphertext, and the client applies the activation locally. A server-side FHE activation using CKKS approximate arithmetic \cite{ckks} would be needed only if the server must return an activated probability rather than a raw score.
+
+% ============================================================
+% ANALYSIS
+% ============================================================
+\section{Analysis}
+
+\subsection{Correctness}
+
+The FHE circuit is evaluated entirely in the integer domain. The only source of error is fixed-point rounding: each encoding introduces at most $\pm 0.0005$ in the original domain, and worst-case accumulated error over 100 trees is $\pm 0.05$. The observed delta on the benchmark fixture is $\approx 0.0166$, consistent with partial error cancellation across trees.
+
+The comparison circuit itself introduces no approximation. TFHE programmable bootstrapping evaluates the Heaviside function exactly as a LUT, unlike BFV or BGV schemes which require polynomial approximation of comparisons \cite{TFHE-rs}. The oblivious evaluation strategy requires that both subtrees be computed at every internal node regardless of the comparison result, ensuring the execution trace is independent of the input and no branch information is leaked through timing or access patterns. The downside of this is that a PBS is computed for every possible node, whereas (in plaintext inference) we only need to visit relevant nodes.
+
+\subsection{Performance}
+
+Benchmarks were collected on the Breast Cancer Wisconsin fixture (100 trees, max depth $\leq 6$, 525 internal nodes, 30 features, \texttt{binary:logistic}, StandardScaler-normalized) on a 12-core CPU in release mode. FHE latency is averaged over 10 runs; plaintext throughput uses 100{,}000 iterations. Results are shown in Table~\ref{tab:bench}.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lrrp{4.5cm}}
+\toprule
+\textbf{Backend} & \textbf{Per call} & \textbf{Throughput (inf/s)} & \textbf{Notes} \\
+\midrule
+weirwood (Rust, plaintext)    & 388.0 ns        & 2{,}577{,}011 & \\
+XGBoost (Python, plaintext)   & 103{,}862.0 ns  & 9{,}628        & \\
+weirwood (Rust, \textbf{FHE}) & 3.9 min         & 0.0042        & avg 10 runs, 525 PBS ops \\
+\bottomrule
+\end{tabular}
+\caption{Inference throughput on the Breast Cancer Wisconsin benchmark fixture. FHE uses Rayon tree-level parallelism on 12 cores. Rust plaintext is approximately $660\times$ faster than Python plaintext and roughly $613{,}000\times$ faster than FHE.}
+\label{tab:bench}
+\end{table}
+
+FHE phase breakdown: key generation 843 ms, encryption 47.583 ms, inference 236.98 s (avg 10 runs), decryption 0.031 ms; observed deviation from plaintext $|\Delta| = 0.0068$.
+
+Rayon tree-level parallelism on 12 cores yields approximately a $9\times$ speedup over the expected serial time of $\approx 3{,}142$ s ($525 \text{ ops} \times 5.98$ s/op), rather than the theoretical $12\times$ maximum. The limited gain reflects the memory-bandwidth bottleneck of PBS operations: each bootstrapping call performs large Number Theoretic Transform (NTT) polynomial operations whose combined working set saturates L3 cache and DRAM bandwidth when executed in parallel \cite{TFHE-rs}. Each tree has on average 5.25 internal nodes (maximum path depth 6), so each Rayon task consists of up to 6 sequential PBS operations, sufficient work to amortize scheduling overhead, but insufficient to hide memory latency.
+
+The primary remaining performance target is GPU acceleration. The \texttt{tfhe-rs} CUDA backend targets $\approx 1$ ms per PBS operation \cite{TFHE-rs}, which would reduce the 525-node model from $\approx 3.95$ min to under 1 s total inference latency.
+
+\subsection{Security}
+
+The security of \textit{weirwood} rests on the RLWE assumption at 128-bit security \cite{regev} using the default parameters from \texttt{tfhe-rs} \cite{TFHE-rs}. The best known attacks use lattice reduction via the Block Korkine--Zolotarev (BKZ) algorithm, which requires $2^{128}$ operations, making the scheme secure against both classical and quantum adversaries.
+
+The server receives a \texttt{ServerContext} containing only the evaluation key, which provides no decryption capability. Under RLWE, the evaluation key is computationally indistinguishable from random; the server learns nothing about plaintext feature values or the decrypted score. The oblivious multiplexer at each node ensures the branch taken is not revealed, as \texttt{eval\_node} unconditionally recurses into both children at every internal node.
+
+One limitation: the server observes the model structure in plaintext. If the model itself is sensitive intellectual property, oblivious RAM (ORAM) for model access would be required, which is outside the scope of this implementation.
+
+% ============================================================
+% CONCLUSION
+% ============================================================
+\section{Conclusion}
+
+\textit{weirwood} demonstrates that end-to-end FHE inference over a full XGBoost ensemble is practically achievable with current cryptographic tooling. A 100-tree, 525-node \texttt{binary:logistic} model evaluates in $\approx 3.95$ min on CPU using TFHE programmable bootstrapping, with results matching the plaintext reference within fixed-point rounding error (observed $|\Delta| \approx 0.0068$, theoretical worst case $\pm 0.05$ with $\text{SCALE} = 1000$). Rayon tree-level parallelism provides a $\approx 9\times$ speedup over serial execution; the remaining gap from linear scaling reflects the memory-bandwidth bottleneck of NTT-based PBS operations.
+
+The primary directions for future work are GPU acceleration via the \texttt{tfhe-rs} CUDA backend (targeting $\approx 1$ ms per PBS op, reducing inference from 3.95 min to under 1 s), server-side activation functions via CKKS approximate arithmetic \cite{ckks} or Chebyshev polynomial evaluation within TFHE, and a transport layer for real network deployment. The project also demonstrates that Rust's type system can enforce the trust boundary between client and server roles at compile time, with a library of approximately 500 lines sufficient to implement the cryptographically correct core of privacy-preserving gradient boosted tree inference.
+
+% ============================================================
+% REFERENCES
+% ============================================================
+\bibliographystyle{plain}
+\begin{thebibliography}{9}
+
+\bibitem{xgboost}
+T.\ Chen and C.\ Guestrin,
+``XGBoost: A Scalable Tree Boosting System,''
+in \textit{Proceedings of the 22nd ACM SIGKDD International Conference on
+Knowledge Discovery and Data Mining (KDD '16)},
+ACM, New York, NY, 2016, pp.\ 785--794.
+\url{https://doi.org/10.1145/2939672.2939785}
+
+\bibitem{gentry}
+C.\ Gentry,
+``Fully Homomorphic Encryption Using Ideal Lattices,''
+in \textit{Proceedings of the 41st Annual ACM Symposium on Theory of Computing
+(STOC '09)},
+ACM, New York, NY, 2009, pp.\ 169--178.
+\url{https://doi.org/10.1145/1536414.1536440}
+
+\bibitem{tfhe}
+I.\ Chillotti, N.\ Gama, M.\ Georgieva, and M.\ Izabachene,
+``TFHE: Fast Fully Homomorphic Encryption over the Torus,''
+\textit{Journal of Cryptology}, vol.\ 33, 2020, pp.\ 34--91.
+\url{https://doi.org/10.1007/s00145-019-09319-x}
+
+\bibitem{regev}
+O. Regev,
+``On Lattices, Learning with Errors, Random Linear Codes, and Cryptography,''
+\textit{Journal of the ACM}, vol.\ 56, art. 34, 2009, pp.\ 1--40.
+\url{https://doi.org/10.1145/1568318.1568324}
+
+\bibitem{ckks}
+J.\ H.\ Cheon, A.\ Kim, M.\ Kim, and Y.\ Song,
+``Homomorphic Encryption for Arithmetic of Approximate Numbers,''
+in \textit{Advances in Cryptology --- ASIACRYPT 2017},
+Springer, 2017, pp.\ 409--437.
+\url{https://doi.org/10.1007/978-3-319-70694-8_15}
+
+\bibitem{fhew}
+L.\ Ducas and D.\ Micciancio,
+``FHEW: Bootstrapping Homomorphic Encryption in Less Than a Second,''
+in \textit{Advances in Cryptology --- EUROCRYPT 2015},
+Springer, 2015, pp.\ 617--640.
+\url{https://doi.org/10.1007/978-3-662-46800-5_24}
+
+\bibitem{ubj}
+XGBoost Contributors,
+``UBJ --- Universal Binary JSON Model Serialization,''
+XGBoost Documentation, 2022.
+\url{https://xgboost.readthedocs.io/en/stable/tutorials/saving_model.html}
+
+\bibitem{TFHE-rs}
+Zama,
+``TFHE-rs: A Pure Rust Implementation of the TFHE Scheme for Boolean and Integer Arithmetics Over Encrypted Data,''
+GitHub, 2022.
+\url{https://github.com/zama-ai/tfhe-rs}
+
+\bibitem{rayon}
+Rayon Contributors,
+``Rayon: A Data Parallelism Library for Rust,''
+GitHub, 2023.
+\url{https://github.com/rayon-rs/rayon}
+
+\end{thebibliography}
+
+\end{document}

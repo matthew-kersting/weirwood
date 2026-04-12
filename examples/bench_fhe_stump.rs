@@ -136,7 +136,7 @@ fn main() -> Result<(), weirwood::Error> {
     println!("Correctness check");
     println!("  plaintext  : {plain_score:.4}");
     println!("  FHE result : {fhe_score:.4}");
-    println!("  |Δ|        : {delta:.4}  (≤ 0.01 expected with SCALE=100)");
+    println!("  |Δ|        : {delta:.4}  (≤ 0.001 expected with SCALE=1000)");
     println!();
 
     // -----------------------------------------------------------------------

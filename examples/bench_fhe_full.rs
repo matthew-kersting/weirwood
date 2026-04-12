@@ -1,11 +1,11 @@
 //! Latency benchmark for FHE full-ensemble inference.
 //!
 //! Measures end-to-end FHE inference on the committed `trained_binary.ubj`
-//! fixture (100 trees, max_depth=8, 177 internal nodes, 2 features,
+//! fixture (Breast Cancer Wisconsin, 100 trees, max_depth=8, 30 features,
 //! `binary:logistic`) and compares against the plaintext Rust baseline.
 //!
-//! FHE latency is averaged over 10 runs.  With 177 PBS ops per inference and
-//! Rayon tree-level parallelism, expect ~64 s per run and ~11 min total on CPU.
+//! FHE latency is averaged over 10 runs.  With 525 PBS ops per inference and
+//! Rayon tree-level parallelism on FheInt32, expect ~130 s per run on CPU.
 //! Plaintext uses 10,000 iterations for a stable per-call figure.
 //!
 //! Called by `benchmarks/run_benchmark.sh`; can also be run directly:
@@ -48,7 +48,7 @@ fn main() -> Result<(), weirwood::Error> {
         .map(|t| t.nodes.iter().filter(|n| !n.is_leaf()).count())
         .sum();
 
-    let features: Vec<f32> = vec![0.7, 0.3];
+    let features: Vec<f32> = vec![0.0; model.num_features];
 
     println!("weirwood · full-ensemble FHE inference benchmark");
     println!("  model       : {model_path}");
@@ -148,8 +148,8 @@ fn main() -> Result<(), weirwood::Error> {
     println!("  plaintext  : {plain_score:.4}");
     println!("  FHE result : {fhe_score:.4}");
     println!(
-        "  |Δ|        : {delta:.4}  (≤ {} expected with SCALE=100)",
-        model.trees.len() as f32 * 0.5 / 100.0
+        "  |Δ|        : {delta:.4}  (≤ {} expected with SCALE=1000)",
+        model.trees.len() as f32 * 0.5 / 1000.0
     );
     println!();
 

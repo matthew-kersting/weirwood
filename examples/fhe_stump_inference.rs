@@ -20,7 +20,7 @@
 //!
 //! The plaintext result from `PlaintextEvaluator` is shown alongside for
 //! comparison.  The two scores must agree within fixed-point rounding error
-//! (at most ±0.01 with SCALE=100).
+//! (at most ±0.001 with SCALE=1000).
 //!
 //! Model: single decision stump — feature[0] ≤ 1.5 → leaf −0.5, else +0.5;
 //!        base_score = 1.0, so expected raw scores are 0.5 (left) and 1.5 (right).

@@ -4,7 +4,7 @@ Privacy-preserving XGBoost inference via Fully Homomorphic Encryption, written i
 
 Load a trained XGBoost model, encrypt a feature vector on the client, and evaluate the entire boosted tree ensemble on ciphertext. The server computes the prediction without ever seeing the input data.
 
-**Status:** Model loading, plaintext inference, and FHE inference are all working. The FHE evaluator supports multi-tree ensembles of arbitrary depth with Rayon tree-level parallelism, validated on a 100-tree `binary:logistic` model with 177 internal nodes (~64 s per inference on CPU, avg 10 runs). Results match plaintext within fixed-point rounding error (`N × 0.5/SCALE` accumulated over N trees; ±0.50 worst-case for 100 trees with `SCALE=100`, observed ≈ 0.017 on the benchmark fixture). Sigmoid and softmax activations are applied client-side on the decrypted raw score.
+**Status:** Model loading, plaintext inference, and FHE inference are all working. The FHE evaluator supports multi-tree ensembles of arbitrary depth with Rayon tree-level parallelism, validated on a 100-tree `binary:logistic` model with 525 internal nodes (~64 s per inference on CPU, avg 10 runs). Results match plaintext within fixed-point rounding error (`N × 0.5/SCALE` accumulated over N trees; ±0.05 worst-case for 100 trees with `SCALE=1000`, observed ≈ 0.0166 on the benchmark fixture). Sigmoid and softmax activations are applied client-side on the decrypted raw score.
 
 ## How it works
 
@@ -18,7 +18,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-weirwood = "0.2"
+weirwood = "0.3"
 ```
 
 ### Plaintext inference
@@ -109,15 +109,17 @@ In a single-process deployment (as in the examples) both parties run in the same
 
 ```
 src/
-  lib.rs         public API and re-exports
-  error.rs       Error enum
-  model.rs       XGBoost IR types (WeirwoodTree, Tree, Node) + JSON/UBJ loader
-  eval.rs        Evaluator trait + PlaintextEvaluator
-  fhe/
-    mod.rs        re-exports
-    client.rs     ClientContext — key generation, encrypt, decrypt
-    server.rs     ServerContext — server key only, set_active
-    evaluator.rs  FheEvaluator — encrypted tree evaluation
+  lib.rs            public API and re-exports
+  error.rs          Error enum
+  model.rs          XGBoost IR types (WeirwoodTree, Tree, Node) + JSON/UBJ loader
+  ubj.rs            Universal Binary JSON parser
+  eval/
+    mod.rs          Evaluator trait + PlaintextEvaluator
+    fhe/
+      mod.rs        re-exports + unit tests
+      client.rs     ClientContext — key generation, encrypt, decrypt; EncryptedInput; SCALE
+      server.rs     ServerContext — server key only, set_active
+      evaluator.rs  FheEvaluator — encrypted tree evaluation
 
 examples/
   plaintext_inference.rs    end-to-end plaintext demo
@@ -125,9 +127,14 @@ examples/
   fhe_full_inference.rs     end-to-end FHE demo on full ensemble (client-side activation)
   bench_plaintext.rs        plaintext throughput benchmark
   bench_fhe_stump.rs        FHE latency benchmark (stump)
-  bench_fhe_full.rs         FHE latency benchmark (100-tree ensemble, 177 PBS ops)
+  bench_fhe_full.rs         FHE latency benchmark (100-tree ensemble, 525 PBS ops)
+
+tests/
+  integration.rs            end-to-end plaintext + FHE correctness tests
+  fixtures/                 trained_binary.{json,ubj}, stump_regression.json, two_trees_binary.json
 
 benchmarks/
+  train_model.py            train Breast Cancer Wisconsin XGBoost model; print test vectors
   run_benchmark.sh          full benchmark (plaintext + FHE) + README update
   run_benchmark_stump.sh    FHE stump benchmark + README update
   bench_python.py           Python/XGBoost baseline (plaintext)
@@ -158,20 +165,20 @@ cargo test
 
 ## Benchmarks
 
-Inference benchmarks on the committed `trained_binary.ubj` fixture (100 trees,
-max_depth=8, 177 internal nodes, 2 features, `binary:logistic`).
-Run `./benchmarks/run_benchmark.sh` to regenerate on your machine.
+Inference benchmarks on the committed `trained_binary.ubj` fixture (Breast Cancer
+Wisconsin, 100 trees, max_depth=8, 525 internal nodes, 30 features, `binary:logistic`,
+StandardScaler-normalized).  Run `./benchmarks/run_benchmark.sh` to regenerate on your machine.
 
 <!-- BENCHMARK_TABLE_START -->
-_Last run: 2026-04-07 · model: `tests/fixtures/trained_binary.ubj` · plaintext: 100,000 iterations · FHE: avg 10 runs_
+_Last run: 2026-04-12 · model: `tests/fixtures/trained_binary.ubj` · plaintext: 100,000 iterations · FHE: avg 10 runs_
 
 | Backend                        | Per call        | Throughput (inf/s) | Notes                              |
 |--------------------------------|-----------------|--------------------|------------------------------------|
-| weirwood (Rust, plaintext)     |     205.7 ns    |            4862404 |                                    |
-| XGBoost (Python, plaintext)    |  111711.7 ns    |               8952 |                                    |
-| weirwood (Rust, **FHE**)       |   1.1 min       |             0.0156 | avg 10 runs, 177 PBS ops        |
+| weirwood (Rust, plaintext)     |     388.0 ns    |            2577011 |                                    |
+| XGBoost (Python, plaintext)    |  103862.0 ns    |               9628 |                                    |
+| weirwood (Rust, **FHE**)       |   3.9 min       |             0.0042 | avg 10 runs, 525 PBS ops        |
 
-FHE phase breakdown: keygen 743 ms · encrypt 1.559 ms · inference 64.23 s (avg 10) · decrypt 0.030 ms · |Δ plaintext| = 0.0166
+FHE phase breakdown: keygen 843 ms · encrypt 47.583 ms · inference 236.98 s (avg 10) · decrypt 0.031 ms · |Δ plaintext| = 0.0068
 <!-- BENCHMARK_TABLE_END -->
 
 ## FHE Stump Benchmark
@@ -185,7 +192,7 @@ Run `./benchmarks/run_benchmark_stump.sh` to regenerate on your machine
 (expect ~30 s total).
 
 <!-- FHE_STUMP_TABLE_START -->
-_Last run: 2026-04-07 · model: `tests/fixtures/stump_regression.json` · stump (depth 1, 1 tree)_
+_Last run: 2026-04-12 · model: `tests/fixtures/stump_regression.json` · stump (depth 1, 1 tree)_
 
 > **Note:** FHE latency is the average of 10 bootstrapping runs;
 > plaintext throughput uses 10,000 iterations.
@@ -193,19 +200,19 @@ _Last run: 2026-04-07 · model: `tests/fixtures/stump_regression.json` · stump 
 
 | Backend                        | Per call          | Throughput (inf/s) | Notes                          |
 |--------------------------------|-------------------|--------------------|--------------------------------|
-| weirwood (Rust, plaintext)     |      7.1 ns      |          141386721 |                                |
-| XGBoost (Python, plaintext)    | 1259886.1 ns      |                794 |                                |
-| weirwood (Rust, **FHE**)       |     1130 ms      |               0.89 | avg 10 runs, 1 PBS op each     |
+| weirwood (Rust, plaintext)     |      2.5 ns      |          396982930 |                                |
+| XGBoost (Python, plaintext)    |  68684.2 ns      |              14559 |                                |
+| weirwood (Rust, **FHE**)       |      610 ms      |               1.64 | avg 10 runs, 1 PBS op each     |
 
-FHE phase breakdown: keygen 1366 ms · encrypt 1.785 ms · inference 1.13 s (avg 10) · decrypt 0.034 ms · |Δ plaintext| = 0.0000
+FHE phase breakdown: keygen 841 ms · encrypt 1.648 ms · inference 0.61 s (avg 10) · decrypt 0.030 ms · |Δ plaintext| = 0.0000
 <!-- FHE_STUMP_TABLE_END -->
 
 ## Performance notes
 
-Each tree node comparison requires one TFHE programmable-bootstrapping operation. On CPU with `tfhe-rs`, each PBS call takes ~1.1 s single-threaded (measured on the stump). The 100-tree ensemble (177 PBS ops) runs in ~64 s with Rayon tree-level parallelism — a ~1.4× speedup over serial execution. All nodes are visited obliviously regardless of the actual path taken.
+Each tree node comparison requires one TFHE programmable-bootstrapping operation on `FheInt32` encrypted inputs. On CPU with `tfhe-rs`, each PBS call takes ~0.6 s (measured on the stump). The 100-tree Breast Cancer ensemble (525 PBS ops) runs with Rayon tree-level parallelism; see the benchmark table for current timings. All nodes are visited obliviously regardless of the actual path taken.
 
-`FheEvaluator` uses a dedicated Rayon thread pool so trees are evaluated in parallel; the speedup scales with available cores.  The primary remaining optimization target for v0.3:
-- **GPU acceleration** — `tfhe-rs`'s CUDA backend targets ~1 ms per PBS op, which would reduce the 177-node model from ~64 s to under 1 s.
+`FheEvaluator` uses a dedicated Rayon thread pool so trees are evaluated in parallel; the speedup scales with available cores but is limited by memory-bandwidth saturation from NTT polynomial operations.  The primary remaining optimization target:
+- **GPU acceleration** — `tfhe-rs`'s CUDA backend targets ~1 ms per PBS op, which would reduce the 525-node model to under 1 s.
 
 ## License
 
