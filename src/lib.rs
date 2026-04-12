@@ -16,8 +16,10 @@
 
 pub mod error;
 pub mod eval;
-pub mod fhe;
 pub mod model;
 pub(crate) mod ubj;
+
+/// Re-exported from [`eval::fhe`] for convenience.
+pub use eval::fhe;
 
 pub use error::Error;

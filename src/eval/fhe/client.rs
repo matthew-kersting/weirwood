@@ -21,10 +21,11 @@
 //!
 //! # Encoding
 //!
-//! `f32` features are encoded as fixed-point `i16` values scaled by
-//! [`SCALE`] before encryption.  This gives two decimal places of precision
-//! and supports feature values in the range `[-327.0, 327.0]`.  The same
-//! scale factor is applied to leaf values by [`FheEvaluator`], so
+//! `f32` features are encoded as fixed-point `i32` values scaled by
+//! [`SCALE`] before encryption.  This gives three decimal places of precision
+//! and supports feature values across the full practical range (i32 holds
+//! up to ±2,147,483 before scaling, far beyond any normalised feature).  The
+//! same scale factor is applied to leaf values by [`FheEvaluator`], so
 //! [`ClientContext::decrypt_score`] simply divides the decrypted integer by
 //! [`SCALE`] to recover the original float range.
 //!
@@ -34,7 +35,7 @@
 //! [`ServerKey`]: tfhe::ServerKey
 
 use tfhe::prelude::*;
-use tfhe::{ConfigBuilder, FheInt16, generate_keys};
+use tfhe::{ConfigBuilder, FheInt32, generate_keys};
 
 use crate::Error;
 
@@ -42,16 +43,16 @@ use super::server::ServerContext;
 
 /// Fixed-point scale factor applied to `f32` features before encryption.
 ///
-/// An `f32` value `v` is stored as `round(v * SCALE)` clamped to `i16`.
+/// An `f32` value `v` is stored as `round(v * SCALE)` clamped to `i32`.
 /// The [`FheEvaluator`](super::evaluator::FheEvaluator) must scale plaintext
 /// leaf values by the same factor so that [`ClientContext::decrypt_score`]
 /// produces the correct result.
-pub const SCALE: f32 = 100.0;
+pub const SCALE: f32 = 1000.0;
 
 /// An encrypted feature vector produced by [`ClientContext::encrypt`].
 ///
-/// Each element is an `FheInt16` representing one feature scaled by [`SCALE`].
-pub type EncryptedInput = Vec<FheInt16>;
+/// Each element is an `FheInt32` representing one feature scaled by [`SCALE`].
+pub type EncryptedInput = Vec<FheInt32>;
 
 /// An encrypted raw ensemble score produced by [`FheEvaluator`].
 ///
@@ -137,8 +138,8 @@ impl ClientContext {
         features
             .iter()
             .map(|&v| {
-                let scaled = (v * SCALE).round().clamp(i16::MIN as f32, i16::MAX as f32) as i16;
-                FheInt16::encrypt(scaled, &self.client_key)
+                let scaled = (v * SCALE).round().clamp(i32::MIN as f32, i32::MAX as f32) as i32;
+                FheInt32::encrypt(scaled, &self.client_key)
             })
             .collect()
     }

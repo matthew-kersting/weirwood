@@ -2,8 +2,9 @@
 //!
 //! [`PlaintextEvaluator`] runs standard floating-point inference and is useful
 //! for verifying model loading and as a correctness reference for the FHE path.
-//!
-//! The FHE evaluator lives in the [`crate::fhe`] module.
+//! The FHE evaluator lives in the [`fhe`] submodule.
+
+pub mod fhe;
 
 use crate::model::{Objective, WeirwoodTree};
 
