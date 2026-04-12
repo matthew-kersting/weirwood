@@ -231,7 +231,7 @@ Sigmoid and softmax activations are applied client-side in plaintext after decry
 
 The FHE circuit is evaluated entirely in the integer domain. The only source of error is fixed-point rounding: each encoding introduces at most $\pm 0.0005$ in the original domain, and worst-case accumulated error over 100 trees is $\pm 0.05$. The observed delta on the benchmark fixture is $\approx 0.0166$, consistent with partial error cancellation across trees.
 
-The comparison circuit itself introduces no approximation. TFHE programmable bootstrapping evaluates the Heaviside function exactly as a LUT, unlike BFV or BGV schemes which require polynomial approximation of comparisons \cite{TFHE-rs}. The oblivious evaluation strategy requires that both subtrees be computed at every internal node regardless of the comparison result, ensuring the execution trace is independent of the input and no branch information is leaked through timing or access patterns.
+The comparison circuit itself introduces no approximation. TFHE programmable bootstrapping evaluates the Heaviside function exactly as a LUT, unlike BFV or BGV schemes which require polynomial approximation of comparisons \cite{TFHE-rs}. The oblivious evaluation strategy requires that both subtrees be computed at every internal node regardless of the comparison result, ensuring the execution trace is independent of the input and no branch information is leaked through timing or access patterns. The downside of this is that a PBS is computed for every possible node, whereas (in plaintext inference) we only need to visit relevant nodes.
 
 \subsection{Performance}
 
@@ -243,20 +243,20 @@ Benchmarks were collected on the Breast Cancer Wisconsin fixture (100 trees, max
 \toprule
 \textbf{Backend} & \textbf{Per call} & \textbf{Throughput (inf/s)} & \textbf{Notes} \\
 \midrule
-weirwood (Rust, plaintext)    & 205.7 ns       & 4{,}862{,}404 & \\
-XGBoost (Python, plaintext)   & 111{,}711.7 ns & 8{,}952       & \\
-weirwood (Rust, \textbf{FHE}) & 64.2 s         & 0.0156        & avg 10 runs, 525 PBS ops \\
+weirwood (Rust, plaintext)    & 388.0 ns        & 2{,}577{,}011 & \\
+XGBoost (Python, plaintext)   & 103{,}862.0 ns  & 9{,}628        & \\
+weirwood (Rust, \textbf{FHE}) & 3.9 min         & 0.0042        & avg 10 runs, 525 PBS ops \\
 \bottomrule
 \end{tabular}
-\caption{Inference throughput on the Breast Cancer Wisconsin benchmark fixture. FHE uses Rayon tree-level parallelism on 12 cores. Rust plaintext is approximately $540\times$ faster than Python plaintext and roughly $312{,}000\times$ faster than FHE.}
+\caption{Inference throughput on the Breast Cancer Wisconsin benchmark fixture. FHE uses Rayon tree-level parallelism on 12 cores. Rust plaintext is approximately $660\times$ faster than Python plaintext and roughly $613{,}000\times$ faster than FHE.}
 \label{tab:bench}
 \end{table}
 
-FHE phase breakdown: key generation 743 ms, encryption 1.6 ms, inference 64.2 s (525 PBS ops), decryption 0.03 ms. A single-stump fixture (1 tree, 1 PBS op) produces $\approx 1.13$ s, confirming the per-PBS floor.
+FHE phase breakdown: key generation 843 ms, encryption 47.583 ms, inference 236.98 s (avg 10 runs), decryption 0.031 ms; observed deviation from plaintext $|\Delta| = 0.0068$.
 
-Rayon tree-level parallelism on 12 cores yields approximately a $9\times$ speedup over the expected serial time of $\approx 578$ s ($525 \text{ ops} \times 1.1$ s/op), rather than the theoretical $12\times$ maximum. The limited gain reflects the memory-bandwidth bottleneck of PBS operations: each bootstrapping call performs large Number Theoretic Transform (NTT) polynomial operations whose combined working set saturates L3 cache and DRAM bandwidth when executed in parallel \cite{TFHE-rs}. Each tree has on average 5.25 internal nodes (maximum path depth 6), so each Rayon task consists of up to 6 sequential PBS operations, sufficient work to amortize scheduling overhead, but insufficient to hide memory latency.
+Rayon tree-level parallelism on 12 cores yields approximately a $9\times$ speedup over the expected serial time of $\approx 3{,}142$ s ($525 \text{ ops} \times 5.98$ s/op), rather than the theoretical $12\times$ maximum. The limited gain reflects the memory-bandwidth bottleneck of PBS operations: each bootstrapping call performs large Number Theoretic Transform (NTT) polynomial operations whose combined working set saturates L3 cache and DRAM bandwidth when executed in parallel \cite{TFHE-rs}. Each tree has on average 5.25 internal nodes (maximum path depth 6), so each Rayon task consists of up to 6 sequential PBS operations, sufficient work to amortize scheduling overhead, but insufficient to hide memory latency.
 
-The primary remaining performance target is GPU acceleration. The \texttt{tfhe-rs} CUDA backend targets $\approx 1$ ms per PBS operation \cite{TFHE-rs}, which would reduce the 525-node model from $\approx 64$ s to under 1 s total inference latency.
+The primary remaining performance target is GPU acceleration. The \texttt{tfhe-rs} CUDA backend targets $\approx 1$ ms per PBS operation \cite{TFHE-rs}, which would reduce the 525-node model from $\approx 3.95$ min to under 1 s total inference latency.
 
 \subsection{Security}
 
@@ -271,9 +271,9 @@ One limitation: the server observes the model structure in plaintext. If the mod
 % ============================================================
 \section{Conclusion}
 
-\textit{weirwood} demonstrates that end-to-end FHE inference over a full XGBoost ensemble is practically achievable with current cryptographic tooling. A 100-tree, 525-node \texttt{binary:logistic} model evaluates in $\approx 64$ s on CPU using TFHE programmable bootstrapping, with results matching the plaintext reference within fixed-point rounding error (observed $|\Delta| \approx 0.0166$, theoretical worst case $\pm 0.05$ with $\text{SCALE} = 1000$). Rayon tree-level parallelism provides a $\approx 9\times$ speedup over serial execution; the remaining gap from linear scaling reflects the memory-bandwidth bottleneck of NTT-based PBS operations.
+\textit{weirwood} demonstrates that end-to-end FHE inference over a full XGBoost ensemble is practically achievable with current cryptographic tooling. A 100-tree, 525-node \texttt{binary:logistic} model evaluates in $\approx 3.95$ min on CPU using TFHE programmable bootstrapping, with results matching the plaintext reference within fixed-point rounding error (observed $|\Delta| \approx 0.0068$, theoretical worst case $\pm 0.05$ with $\text{SCALE} = 1000$). Rayon tree-level parallelism provides a $\approx 9\times$ speedup over serial execution; the remaining gap from linear scaling reflects the memory-bandwidth bottleneck of NTT-based PBS operations.
 
-The primary directions for future work are GPU acceleration via the \texttt{tfhe-rs} CUDA backend (targeting $\approx 1$ ms per PBS op, reducing inference from 64 s to under 1 s), server-side activation functions via CKKS approximate arithmetic \cite{ckks} or Chebyshev polynomial evaluation within TFHE, and a transport layer for real network deployment. The project also demonstrates that Rust's type system can enforce the trust boundary between client and server roles at compile time, with a library of approximately 500 lines sufficient to implement the cryptographically correct core of privacy-preserving gradient boosted tree inference.
+The primary directions for future work are GPU acceleration via the \texttt{tfhe-rs} CUDA backend (targeting $\approx 1$ ms per PBS op, reducing inference from 3.95 min to under 1 s), server-side activation functions via CKKS approximate arithmetic \cite{ckks} or Chebyshev polynomial evaluation within TFHE, and a transport layer for real network deployment. The project also demonstrates that Rust's type system can enforce the trust boundary between client and server roles at compile time, with a library of approximately 500 lines sufficient to implement the cryptographically correct core of privacy-preserving gradient boosted tree inference.
 
 % ============================================================
 % REFERENCES

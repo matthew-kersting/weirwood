@@ -18,7 +18,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-weirwood = "0.2"
+weirwood = "0.3"
 ```
 
 ### Plaintext inference
@@ -170,15 +170,15 @@ Wisconsin, 100 trees, max_depth=8, 525 internal nodes, 30 features, `binary:logi
 StandardScaler-normalized).  Run `./benchmarks/run_benchmark.sh` to regenerate on your machine.
 
 <!-- BENCHMARK_TABLE_START -->
-_Last run: 2026-04-07 · model: `tests/fixtures/trained_binary.ubj` · plaintext: 100,000 iterations · FHE: avg 10 runs_
+_Last run: 2026-04-12 · model: `tests/fixtures/trained_binary.ubj` · plaintext: 100,000 iterations · FHE: avg 10 runs_
 
 | Backend                        | Per call        | Throughput (inf/s) | Notes                              |
 |--------------------------------|-----------------|--------------------|------------------------------------|
-| weirwood (Rust, plaintext)     |     205.7 ns    |            4862404 |                                    |
-| XGBoost (Python, plaintext)    |  111711.7 ns    |               8952 |                                    |
-| weirwood (Rust, **FHE**)       |   1.1 min       |             0.0156 | avg 10 runs, 525 PBS ops        |
+| weirwood (Rust, plaintext)     |     388.0 ns    |            2577011 |                                    |
+| XGBoost (Python, plaintext)    |  103862.0 ns    |               9628 |                                    |
+| weirwood (Rust, **FHE**)       |   3.9 min       |             0.0042 | avg 10 runs, 525 PBS ops        |
 
-FHE phase breakdown: keygen 743 ms · encrypt 1.559 ms · inference 64.23 s (avg 10) · decrypt 0.030 ms · |Δ plaintext| = 0.0166
+FHE phase breakdown: keygen 843 ms · encrypt 47.583 ms · inference 236.98 s (avg 10) · decrypt 0.031 ms · |Δ plaintext| = 0.0068
 <!-- BENCHMARK_TABLE_END -->
 
 ## FHE Stump Benchmark
@@ -192,7 +192,7 @@ Run `./benchmarks/run_benchmark_stump.sh` to regenerate on your machine
 (expect ~30 s total).
 
 <!-- FHE_STUMP_TABLE_START -->
-_Last run: 2026-04-07 · model: `tests/fixtures/stump_regression.json` · stump (depth 1, 1 tree)_
+_Last run: 2026-04-12 · model: `tests/fixtures/stump_regression.json` · stump (depth 1, 1 tree)_
 
 > **Note:** FHE latency is the average of 10 bootstrapping runs;
 > plaintext throughput uses 10,000 iterations.
@@ -200,11 +200,11 @@ _Last run: 2026-04-07 · model: `tests/fixtures/stump_regression.json` · stump 
 
 | Backend                        | Per call          | Throughput (inf/s) | Notes                          |
 |--------------------------------|-------------------|--------------------|--------------------------------|
-| weirwood (Rust, plaintext)     |      7.1 ns      |          141386721 |                                |
-| XGBoost (Python, plaintext)    | 1259886.1 ns      |                794 |                                |
-| weirwood (Rust, **FHE**)       |     1130 ms      |               0.89 | avg 10 runs, 1 PBS op each     |
+| weirwood (Rust, plaintext)     |      2.5 ns      |          396982930 |                                |
+| XGBoost (Python, plaintext)    |  68684.2 ns      |              14559 |                                |
+| weirwood (Rust, **FHE**)       |      610 ms      |               1.64 | avg 10 runs, 1 PBS op each     |
 
-FHE phase breakdown: keygen 1366 ms · encrypt 1.785 ms · inference 1.13 s (avg 10) · decrypt 0.034 ms · |Δ plaintext| = 0.0000
+FHE phase breakdown: keygen 841 ms · encrypt 1.648 ms · inference 0.61 s (avg 10) · decrypt 0.030 ms · |Δ plaintext| = 0.0000
 <!-- FHE_STUMP_TABLE_END -->
 
 ## Performance notes
