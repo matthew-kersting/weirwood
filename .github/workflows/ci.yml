@@ -63,7 +63,7 @@ jobs:
         run: cargo check
 
       - name: Test (default features)
-        run: cargo test
+        run: cargo test --release
 
       - name: Check formatting
         run: cargo fmt --check
