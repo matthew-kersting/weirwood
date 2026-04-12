@@ -23,17 +23,18 @@
 //!
 //! # Default model
 //!
-//! `tests/fixtures/trained_binary.ubj` — 100 trees, max_depth=8, 177 internal
-//! nodes, 2 features, objective `binary:logistic`.  Pass any XGBoost JSON or
-//! UBJ model file as a CLI argument, followed by optional feature values:
+//! `tests/fixtures/trained_binary.ubj` — 100 trees, max_depth≤6, 525 internal
+//! nodes, 30 features, objective `binary:logistic` (Breast Cancer Wisconsin).
+//! Pass any XGBoost JSON or UBJ model file as a CLI argument, followed by
+//! optional feature values:
 //!
 //! ```sh
 //! cargo run --release --example fhe_full_inference
-//! cargo run --release --example fhe_full_inference -- path/to/model.ubj 0.7 0.3
+//! cargo run --release --example fhe_full_inference -- path/to/model.ubj
 //! ```
 //!
 //! **WARNING:** FHE key generation takes ~1 s; with Rayon tree-level parallelism
-//! the default model (177 PBS ops, 100 trees) takes ~64 s per inference.  With 3
+//! the default model (525 PBS ops, 100 trees) takes ~64 s per inference.  With 3
 //! default test cases expect ~200 s (~3 min) total.  Always run in release mode.
 
 use std::time::Instant;

@@ -2,7 +2,7 @@
 
 Uses sklearn's built-in breast_cancer dataset (569 samples, 30 features,
 binary: malignant=0 / benign=1). Features are StandardScaler-normalized so
-they fit within weirwood's fixed-point encoding (SCALE=100, i16, range ±3.27).
+they fit within weirwood's fixed-point encoding (SCALE=1000, i32).
 
 Produces:
   tests/fixtures/trained_binary.json
@@ -34,7 +34,8 @@ def main():
 
     # Load and normalize the dataset.  StandardScaler maps each feature to
     # mean=0 / std=1, keeping ~99.7% of values within [-3, 3] — well inside
-    # the ±3.27 range imposed by weirwood's SCALE=100 / i16 encoding.
+    # weirwood uses SCALE=1000 / i32 encoding — StandardScaler keeps features
+    # within roughly [-3, 3], well inside the representable range.
     data = load_breast_cancer()
     X, y = data.data.astype(np.float32), data.target.astype(np.float32)
 

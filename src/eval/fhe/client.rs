@@ -129,7 +129,7 @@ impl ClientContext {
 
     /// Encrypt a plaintext feature vector using the private key.
     ///
-    /// Each `f32` is multiplied by [`SCALE`], rounded, clamped to `i16`,
+    /// Each `f32` is multiplied by [`SCALE`], rounded, clamped to `i32`,
     /// and then encrypted.  The resulting [`EncryptedInput`] can be sent to
     /// the inference server alongside the [`ServerContext`].
     ///

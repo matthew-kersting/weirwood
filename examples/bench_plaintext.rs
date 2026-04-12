@@ -25,7 +25,7 @@ fn main() -> Result<(), weirwood::Error> {
         WeirwoodTree::from_json_file(&model_path)?
     };
 
-    let features: Vec<f32> = vec![0.7, 0.3];
+    let features: Vec<f32> = vec![0.0; weirwood_tree.num_features];
     let evaluator: PlaintextEvaluator = PlaintextEvaluator;
 
     // Warm up instruction / branch-predictor caches.
