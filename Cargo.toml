@@ -1,6 +1,6 @@
 [package]
 name = "weirwood"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 description = "Privacy-preserving XGBoost inference via Fully Homomorphic Encryption"
 license = "MIT"
