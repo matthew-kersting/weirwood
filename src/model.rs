@@ -149,7 +149,7 @@ impl WeirwoodTree {
 
         let trees: Vec<Tree> = serialized_trees
             .into_iter()
-            .map(tree_from_raw)
+            .map(|raw_tree| tree_from_raw(raw_tree, num_features))
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(WeirwoodTree {
@@ -185,7 +185,11 @@ fn parse_base_score(raw_base_score: &str) -> Result<f32, Error> {
     }
 }
 
-fn tree_from_raw(raw_tree: RawTree) -> Result<Tree, Error> {
+/// Scale factor used by the FHE evaluator to encode `f32` thresholds as `i32`.
+/// Must match `eval::fhe::client::SCALE`.
+const FHE_SCALE: f32 = 1000.0;
+
+fn tree_from_raw(raw_tree: RawTree, num_features: usize) -> Result<Tree, Error> {
     let node_count: usize = raw_tree.left_children.len();
     if raw_tree.right_children.len() != node_count
         || raw_tree.split_conditions.len() != node_count
@@ -206,6 +210,46 @@ fn tree_from_raw(raw_tree: RawTree) -> Result<Tree, Error> {
             leaf_value: raw_tree.base_weights[node_index],
         })
         .collect();
+
+    // Validate structural integrity and FHE compatibility of each node.
+    for (i, node) in nodes.iter().enumerate() {
+        if node.is_leaf() {
+            continue;
+        }
+
+        // Ensure the split feature index is within bounds.
+        if node.split_feature as usize >= num_features {
+            return Err(Error::Format(format!(
+                "node {i}: split_feature {} >= num_features {num_features}",
+                node.split_feature
+            )));
+        }
+
+        // Ensure child indices are valid node indices.
+        if node.left_child < 0 || node.left_child as usize >= node_count {
+            return Err(Error::Format(format!(
+                "node {i}: left_child {} is out of bounds (node_count={node_count})",
+                node.left_child
+            )));
+        }
+        if node.right_child < 0 || node.right_child as usize >= node_count {
+            return Err(Error::Format(format!(
+                "node {i}: right_child {} is out of bounds (node_count={node_count})",
+                node.right_child
+            )));
+        }
+
+        // Warn if the threshold would be clamped when encoded for FHE.
+        let scaled = node.split_threshold * FHE_SCALE;
+        if scaled > i32::MAX as f32 || scaled < i32::MIN as f32 {
+            eprintln!(
+                "weirwood warning: node {i} split_threshold {} exceeds i32 range after FHE \
+                 scaling (scaled={scaled:.0}); encrypted comparisons at this node will be \
+                 incorrect",
+                node.split_threshold
+            );
+        }
+    }
 
     Ok(Tree { nodes })
 }
