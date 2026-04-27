@@ -13,4 +13,7 @@ pub enum Error {
 
     #[error("FHE error: {0}")]
     Fhe(String),
+
+    #[error("{0}")]
+    Other(String),
 }
