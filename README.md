@@ -156,11 +156,26 @@ benchmarks/
 | `binary:logistic` | Yes | Yes (sigmoid applied client-side post-decrypt) |
 | `multi:softmax` | Partial | Planned |
 
+## Features
+
+| Feature | Status | Purpose |
+|---------|--------|---------|
+| (default, none) | Stable | Core library: model loading, plaintext/FHE inference |
+| `transport` | Stable | gRPC-compatible TCP server and client examples for distributed inference |
+
 ## Building
 
 ```sh
 cargo build   # tfhe-rs is a required dependency — expect a longer first compile
 cargo test
+
+# For network transport layer (gRPC-compatible server and client examples)
+cargo build --features transport
+cargo test --features transport
+
+# Run server and client examples (requires --features transport)
+cargo run --release --example server --features transport -- --model tests/fixtures/trained_binary.ubj
+cargo run --release --example client --features transport
 ```
 
 ## Benchmarks

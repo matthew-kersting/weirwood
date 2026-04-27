@@ -43,3 +43,11 @@ tonic-build = "0.14"
 [dev-dependencies]
 approx = "0.5.1"
 uuid = { version = "1.23.1", features = ["v4"] }
+
+[[example]]
+name = "server"
+required-features = ["transport"]
+
+[[example]]
+name = "client"
+required-features = ["transport"]

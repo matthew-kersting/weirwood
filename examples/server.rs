@@ -22,8 +22,9 @@ use weirwood::{
     fhe::FheEvaluator,
     model::WeirwoodTree,
     transport::{
-        deserialize_feature, deserialize_server_context, serialize_score,
+        deserialize_feature, deserialize_server_context,
         rpc::{InitSessionRequest, InitSessionResponse, PredictRequest, PredictResponse},
+        serialize_score,
     },
 };
 
@@ -62,7 +63,10 @@ fn handle_client(mut stream: TcpStream, model: Arc<WeirwoodTree>, sessions: Sess
 
                     match weirwood::transport::deserialize_server_context(&req.server_key) {
                         Ok(server_ctx) => {
-                            println!("[init] Creating evaluator (server key {} MB)", req.server_key.len() / 1_000_000);
+                            println!(
+                                "[init] Creating evaluator (server key {} MB)",
+                                req.server_key.len() / 1_000_000
+                            );
                             let evaluator = FheEvaluator::new(server_ctx);
 
                             let mut sess = sessions.lock().unwrap();
@@ -186,7 +190,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 model_path = args.next().expect("--model requires a path");
             }
             "--port" => {
-                port = args.next().expect("--port requires a number").parse().expect("invalid port");
+                port = args
+                    .next()
+                    .expect("--port requires a number")
+                    .parse()
+                    .expect("invalid port");
             }
             _ => eprintln!("unknown argument: {}", arg),
         }

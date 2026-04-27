@@ -10,8 +10,8 @@ use std::io::{Cursor, Read, Write};
 
 use tfhe::safe_serialization::{safe_deserialize, safe_serialize};
 
-use crate::eval::fhe::{EncryptedInput, EncryptedScore, ServerContext};
 use crate::Error;
+use crate::eval::fhe::{EncryptedInput, EncryptedScore, ServerContext};
 
 const SIZE_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 

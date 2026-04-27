@@ -15,8 +15,10 @@ use weirwood::{
     eval::Evaluator as _,
     fhe::ClientContext,
     model::WeirwoodTree,
-    transport::{deserialize_score, serialize_encrypted_input, serialize_feature, serialize_server_context},
     transport::rpc::{InitSessionRequest, InitSessionResponse, PredictRequest, PredictResponse},
+    transport::{
+        deserialize_score, serialize_encrypted_input, serialize_feature, serialize_server_context,
+    },
 };
 
 const DEFAULT_MODEL: &str = "tests/fixtures/trained_binary.ubj";
@@ -103,7 +105,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
 
     println!("Running {} test inferences…", test_cases.len());
-    println!("{:<30} {:<15} {:<15} {:<15}", "Test case", "Plaintext", "FHE", "Δ");
+    println!(
+        "{:<30} {:<15} {:<15} {:<15}",
+        "Test case", "Plaintext", "FHE", "Δ"
+    );
     println!("{}", "-".repeat(75));
 
     for (name, features) in test_cases {

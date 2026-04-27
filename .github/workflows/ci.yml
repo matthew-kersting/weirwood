@@ -65,8 +65,14 @@ jobs:
       - name: Test (default features)
         run: cargo test --release
 
+      - name: Test (all features)
+        run: cargo test --release --features transport
+
       - name: Check formatting
         run: cargo fmt --check
 
       - name: Clippy
         run: cargo clippy -- -D warnings
+
+      - name: Clippy (transport feature)
+        run: cargo clippy --features transport -- -D warnings
