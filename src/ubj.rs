@@ -10,6 +10,10 @@ use serde_json::{Map, Number, Value};
 
 use crate::Error;
 
+/// Maximum number of elements permitted in a single counted UBJ array or
+/// object.  Guards against OOM from a crafted file with a huge `count` field.
+const MAX_ARRAY_SIZE: usize = 1_000_000;
+
 /// Parse XGBoost UBJ bytes into a `serde_json::Value`.
 pub(crate) fn parse(data: &[u8]) -> Result<Value, Error> {
     let mut pos: usize = 0usize;
@@ -31,7 +35,7 @@ fn read_byte(data: &[u8], pos: &mut usize) -> Result<u8, Error> {
 }
 
 fn read_n<const N: usize>(data: &[u8], pos: &mut usize) -> Result<[u8; N], Error> {
-    if *pos + N > data.len() {
+    if pos.saturating_add(N) > data.len() {
         return Err(Error::Format("unexpected end of UBJ data".into()));
     }
     let arr: [u8; N] = data[*pos..*pos + N].try_into().unwrap();
@@ -71,7 +75,7 @@ fn read_f64(data: &[u8], pos: &mut usize) -> Result<f64, Error> {
 /// Object keys use this format (without the preceding `S` marker).
 fn read_string(data: &[u8], pos: &mut usize) -> Result<String, Error> {
     let len: usize = read_count(data, pos)?;
-    if *pos + len > data.len() {
+    if pos.saturating_add(len) > data.len() {
         return Err(Error::Format("UBJ string truncated".into()));
     }
     let s: String = std::str::from_utf8(&data[*pos..*pos + len])
@@ -187,6 +191,11 @@ fn parse_array(data: &[u8], pos: &mut usize) -> Result<Value, Error> {
             }
         }
         let count = read_count(data, pos)?;
+        if count > MAX_ARRAY_SIZE {
+            return Err(Error::Format(format!(
+                "UBJ array count {count} exceeds maximum {MAX_ARRAY_SIZE}"
+            )));
+        }
         let arr = (0..count)
             .map(|_| read_typed(data, pos, type_marker))
             .collect::<Result<Vec<_>, _>>()?;
@@ -197,6 +206,11 @@ fn parse_array(data: &[u8], pos: &mut usize) -> Result<Value, Error> {
     if data[*pos] == b'#' {
         *pos += 1;
         let count: usize = read_count(data, pos)?;
+        if count > MAX_ARRAY_SIZE {
+            return Err(Error::Format(format!(
+                "UBJ array count {count} exceeds maximum {MAX_ARRAY_SIZE}"
+            )));
+        }
         let arr: Vec<Value> = (0..count)
             .map(|_| parse_value(data, pos))
             .collect::<Result<Vec<_>, _>>()?;
@@ -236,6 +250,11 @@ fn parse_object(data: &[u8], pos: &mut usize) -> Result<Value, Error> {
             }
         }
         let count: usize = read_count(data, pos)?;
+        if count > MAX_ARRAY_SIZE {
+            return Err(Error::Format(format!(
+                "UBJ object count {count} exceeds maximum {MAX_ARRAY_SIZE}"
+            )));
+        }
         let mut map: Map<String, Value> = Map::with_capacity(count);
         for _ in 0..count {
             let key = read_string(data, pos)?;
@@ -249,6 +268,11 @@ fn parse_object(data: &[u8], pos: &mut usize) -> Result<Value, Error> {
     if data[*pos] == b'#' {
         *pos += 1;
         let count: usize = read_count(data, pos)?;
+        if count > MAX_ARRAY_SIZE {
+            return Err(Error::Format(format!(
+                "UBJ object count {count} exceeds maximum {MAX_ARRAY_SIZE}"
+            )));
+        }
         let mut map: Map<String, Value> = Map::with_capacity(count);
         for _ in 0..count {
             let key = read_string(data, pos)?;
