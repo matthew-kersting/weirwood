@@ -1,20 +1,52 @@
-//! Serialization helpers and Protocol Buffer message types for transporting
-//! FHE artifacts over the wire.
+//! gRPC transport for privacy-preserving inference, plus the
+//! `safe_serialize` / `safe_deserialize` helpers that move FHE artifacts
+//! across the wire.
 //!
-//! Provides functions to serialize and deserialize `ServerContext` and
-//! encrypted data types using `tfhe-rs`' versioned `safe_serialize` /
-//! `safe_deserialize` format. The bundled examples frame these bytes directly
-//! over TCP; the same payloads could equally be carried by gRPC or any other
-//! length-prefixed protocol.
+//! # gRPC contract
+//!
+//! The Protocol Buffer service definition lives in `proto/inference.proto`
+//! and is compiled to Rust by `tonic-build` at crate-build time. The
+//! generated server trait and client stub are re-exported here for
+//! convenience:
+//!
+//! ```text
+//! use weirwood::transport::{InferenceServiceServer, InferenceService,
+//!                           InferenceServiceClient};
+//! ```
+//!
+//! Implement [`InferenceService`] and serve it under
+//! `tonic::transport::Server`; see `examples/server.rs` for the minimal
+//! wiring. A high-level convenience client that bundles
+//! key-generation → InitSession → encrypt → Predict → decrypt → activation
+//! is provided by [`WeirwoodClient`] (gated on the `transport` feature).
+//!
+//! # Payload encoding
+//!
+//! All ciphertext bytes use `tfhe-rs`' versioned `safe_serialize` /
+//! `safe_deserialize` format. Helpers are exposed for callers that want to
+//! drive the protocol manually (e.g. proxying through a different transport).
 
 pub mod rpc;
 
-use std::io::{Cursor, Read, Write};
+mod client;
+pub use client::WeirwoodClient;
+
+/// gRPC server-side trait — implement this and wrap with
+/// [`InferenceServiceServer::new`] to plug into `tonic::transport::Server`.
+pub use rpc::inference_service_server::{InferenceService, InferenceServiceServer};
+
+/// gRPC client stub — typically used by [`WeirwoodClient`], but exposed for
+/// callers who want to drive the protocol themselves.
+pub use rpc::inference_service_client::InferenceServiceClient;
+
+pub use rpc::{InitSessionRequest, InitSessionResponse, PredictRequest, PredictResponse};
+
+use std::io::{Cursor, Read};
 
 use tfhe::safe_serialization::{safe_deserialize, safe_serialize};
 
 use crate::Error;
-use crate::eval::fhe::{EncryptedInput, EncryptedScore, ServerContext};
+use crate::eval::fhe::{EncryptedScore, ServerContext};
 
 const SIZE_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -74,7 +106,7 @@ pub fn deserialize_score(bytes: &[u8]) -> Result<EncryptedScore, Error> {
 /// Each feature is serialized individually and concatenated, with a 4-byte
 /// length prefix indicating the number of features. This avoids relying on
 /// `Named` for `Vec<FheInt32>`, which is not implemented by tfhe-rs.
-pub fn serialize_encrypted_input(input: &EncryptedInput) -> Result<Vec<u8>, Error> {
+pub fn serialize_encrypted_input(input: &[tfhe::FheInt32]) -> Result<Vec<u8>, Error> {
     let mut buf = Vec::new();
     let num_features = input.len() as u32;
     buf.extend_from_slice(&num_features.to_le_bytes());
@@ -89,7 +121,7 @@ pub fn serialize_encrypted_input(input: &EncryptedInput) -> Result<Vec<u8>, Erro
 /// Deserialize an encrypted input (feature vector) from bytes.
 ///
 /// Expects the format produced by `serialize_encrypted_input`.
-pub fn deserialize_encrypted_input(bytes: &[u8]) -> Result<EncryptedInput, Error> {
+pub fn deserialize_encrypted_input(bytes: &[u8]) -> Result<Vec<tfhe::FheInt32>, Error> {
     let mut reader = Cursor::new(bytes);
 
     let mut num_features_bytes = [0u8; 4];

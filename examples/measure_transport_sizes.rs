@@ -13,9 +13,7 @@
 use weirwood::{
     fhe::ClientContext,
     model::WeirwoodTree,
-    transport::{
-        serialize_encrypted_input, serialize_feature, serialize_server_context,
-    },
+    transport::{serialize_encrypted_input, serialize_feature, serialize_server_context},
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -12,7 +12,7 @@ readme = "README.md"
 exclude = ["weirwood_1pager.md", "benchmarks/"]
 
 [features]
-transport = ["dep:prost"]
+transport = ["dep:tonic", "dep:prost", "dep:tokio", "dep:tokio-stream"]
 
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
@@ -24,9 +24,28 @@ rayon = "1.11.0"
 version = "1.6.1"
 features = ["shortint", "integer"]
 
-[dependencies.prost]
-version = "0.14"
+[dependencies.tonic]
+version = "0.12"
+features = ["transport", "codegen", "prost"]
 optional = true
+
+[dependencies.prost]
+version = "0.13"
+optional = true
+
+[dependencies.tokio]
+version = "1"
+features = ["rt-multi-thread", "macros", "sync", "net"]
+optional = true
+
+[dependencies.tokio-stream]
+version = "0.1"
+features = ["net"]
+optional = true
+
+[build-dependencies]
+tonic-build = "0.12"
+protoc-bin-vendored = "3"
 
 [dev-dependencies]
 approx = "0.5.1"

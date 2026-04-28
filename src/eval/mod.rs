@@ -9,9 +9,13 @@ pub mod fhe;
 use crate::model::{Objective, WeirwoodTree};
 
 /// Trait implemented by any inference backend (plaintext or encrypted).
+///
+/// `Input` is `?Sized` so backends can choose the idiomatic borrow shape
+/// (e.g. `[f32]` instead of `Vec<f32>`).  Callers pass `&features` and the
+/// usual `Vec → slice` deref coercion just works.
 pub trait Evaluator {
     /// The type of a single feature vector the evaluator accepts.
-    type Input;
+    type Input: ?Sized;
     /// The type of the raw pre-activation score returned.
     type Output;
 
@@ -27,10 +31,10 @@ pub trait Evaluator {
 pub struct PlaintextEvaluator;
 
 impl Evaluator for PlaintextEvaluator {
-    type Input = Vec<f32>;
+    type Input = [f32];
     type Output = f32;
 
-    fn predict(&self, weirwood_tree: &WeirwoodTree, features: &Vec<f32>) -> f32 {
+    fn predict(&self, weirwood_tree: &WeirwoodTree, features: &[f32]) -> f32 {
         let raw_score: f32 = weirwood_tree
             .trees
             .iter()
@@ -48,7 +52,7 @@ impl PlaintextEvaluator {
     /// - `MultiSoftmax` → **panics**; multi-class returns a vector of class
     ///   probabilities, which doesn't fit this method's `f32` return type.
     ///   Use [`Self::predict_multiclass_proba`] instead.
-    pub fn predict_proba(&self, weirwood_tree: &WeirwoodTree, features: &Vec<f32>) -> f32 {
+    pub fn predict_proba(&self, weirwood_tree: &WeirwoodTree, features: &[f32]) -> f32 {
         match &weirwood_tree.objective {
             Objective::BinaryLogistic => sigmoid(self.predict(weirwood_tree, features)),
             Objective::RegSquaredError => self.predict(weirwood_tree, features),
@@ -74,7 +78,7 @@ impl PlaintextEvaluator {
     pub fn predict_multiclass(
         &self,
         weirwood_tree: &WeirwoodTree,
-        features: &Vec<f32>,
+        features: &[f32],
     ) -> Vec<f32> {
         let num_class = match &weirwood_tree.objective {
             Objective::MultiSoftmax { num_class } => *num_class,
@@ -99,7 +103,7 @@ impl PlaintextEvaluator {
     pub fn predict_multiclass_proba(
         &self,
         weirwood_tree: &WeirwoodTree,
-        features: &Vec<f32>,
+        features: &[f32],
     ) -> Vec<f32> {
         softmax(&self.predict_multiclass(weirwood_tree, features))
     }
@@ -564,7 +568,11 @@ mod tests {
         };
         WeirwoodTree {
             // Interleaved: tree[0] → class 0, tree[1] → class 1, tree[2] → class 2.
-            trees: vec![stump_for_value(0.0), stump_for_value(1.0), stump_for_value(2.0)],
+            trees: vec![
+                stump_for_value(0.0),
+                stump_for_value(1.0),
+                stump_for_value(2.0),
+            ],
             objective: Objective::MultiSoftmax { num_class: 3 },
             base_score: 0.0,
             num_features: 1,

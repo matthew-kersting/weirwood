@@ -8,6 +8,7 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::Error;
+use crate::eval::fhe::SCALE as FHE_SCALE;
 
 // ---------------------------------------------------------------------------
 // Public IR types
@@ -122,6 +123,35 @@ impl WeirwoodTree {
         Self::from_raw(raw_model)
     }
 
+    /// Inspect the loaded tree for issues that would only manifest under FHE
+    /// evaluation but are silently fine for plaintext use.
+    ///
+    /// Returns an empty vector when the model is safe to evaluate under FHE.
+    /// Callers using only [`PlaintextEvaluator`](crate::eval::PlaintextEvaluator)
+    /// can ignore the result; callers about to construct an
+    /// [`FheEvaluator`](crate::eval::fhe::FheEvaluator) should treat any
+    /// warning as a hard error (FHE evaluation will produce wrong results at
+    /// affected nodes).
+    pub fn validate_for_fhe(&self) -> Vec<LoadWarning> {
+        let mut warnings = Vec::new();
+        for (tree_index, tree) in self.trees.iter().enumerate() {
+            for (node_index, node) in tree.nodes.iter().enumerate() {
+                if node.is_leaf() {
+                    continue;
+                }
+                let scaled = node.split_threshold * FHE_SCALE;
+                if scaled > i32::MAX as f32 || scaled < i32::MIN as f32 {
+                    warnings.push(LoadWarning::ThresholdOverflowsFheRange {
+                        tree_index,
+                        node_index,
+                        threshold: node.split_threshold,
+                    });
+                }
+            }
+        }
+        warnings
+    }
+
     fn from_raw(raw_model: RawModel) -> Result<Self, Error> {
         let learner: RawLearner = raw_model.learner;
 
@@ -185,9 +215,41 @@ fn parse_base_score(raw_base_score: &str) -> Result<f32, Error> {
     }
 }
 
-/// Scale factor used by the FHE evaluator to encode `f32` thresholds as `i32`.
-/// Must match `eval::fhe::client::SCALE`.
-const FHE_SCALE: f32 = 1000.0;
+/// A non-fatal issue discovered while loading a [`WeirwoodTree`].
+///
+/// Returned by [`WeirwoodTree::validate_for_fhe`] so that applications can
+/// decide how to react (warn, log, abort) instead of the library writing to
+/// stderr behind their backs.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LoadWarning {
+    /// An internal node's threshold, after scaling by the FHE fixed-point
+    /// factor, falls outside the `i32` range. FHE evaluation at this node
+    /// will compare the encrypted feature against a clamped threshold and
+    /// produce an incorrect routing decision. Plaintext evaluation is
+    /// unaffected.
+    ThresholdOverflowsFheRange {
+        tree_index: usize,
+        node_index: usize,
+        threshold: f32,
+    },
+}
+
+impl std::fmt::Display for LoadWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LoadWarning::ThresholdOverflowsFheRange {
+                tree_index,
+                node_index,
+                threshold,
+            } => write!(
+                f,
+                "tree {tree_index}, node {node_index}: split_threshold {threshold} \
+                 exceeds i32 range after FHE scaling; encrypted comparisons at this \
+                 node will be incorrect"
+            ),
+        }
+    }
+}
 
 fn tree_from_raw(raw_tree: RawTree, num_features: usize) -> Result<Tree, Error> {
     let node_count: usize = raw_tree.left_children.len();
@@ -239,16 +301,9 @@ fn tree_from_raw(raw_tree: RawTree, num_features: usize) -> Result<Tree, Error> 
             )));
         }
 
-        // Warn if the threshold would be clamped when encoded for FHE.
-        let scaled = node.split_threshold * FHE_SCALE;
-        if scaled > i32::MAX as f32 || scaled < i32::MIN as f32 {
-            eprintln!(
-                "weirwood warning: node {i} split_threshold {} exceeds i32 range after FHE \
-                 scaling (scaled={scaled:.0}); encrypted comparisons at this node will be \
-                 incorrect",
-                node.split_threshold
-            );
-        }
+        // FHE-specific threshold-range checks are deferred to
+        // WeirwoodTree::validate_for_fhe so this loader doesn't print to
+        // stderr or block plaintext-only consumers of overflowing models.
     }
 
     Ok(Tree { nodes })

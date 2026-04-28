@@ -44,10 +44,14 @@ impl ServerContext {
     }
 
     /// Install the server key as the thread-local active key for TFHE-rs
-    /// operations.
+    /// operations on the calling thread.
     ///
-    /// Must be called on the thread that will run inference before invoking
-    /// `FheEvaluator::predict`.
+    /// Most users do not need this — [`FheEvaluator`](super::evaluator::FheEvaluator)
+    /// installs the key on its worker threads at construction and lazily
+    /// installs it on the calling thread the first time `predict` runs there.
+    /// Use this only for advanced scenarios where you call TFHE-rs primitives
+    /// directly without going through an `FheEvaluator`.
+    ///
     /// Each call clones the server key internally (unavoidable due to the
     /// tfhe-rs API); avoid calling this in a hot loop.
     pub fn set_active(&self) {

@@ -82,7 +82,8 @@ fn main() -> Result<(), weirwood::Error> {
     // -----------------------------------------------------------------------
     // Server setup
     // -----------------------------------------------------------------------
-    server_ctx.set_active(); // install key on the calling thread (worker threads get it via start_handler)
+    // FheEvaluator::new installs the server key on its worker threads;
+    // predict() lazily installs it on the calling thread on first use.
     let evaluator = FheEvaluator::new(server_ctx);
 
     // -----------------------------------------------------------------------

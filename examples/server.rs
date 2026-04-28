@@ -1,25 +1,22 @@
-//! Simple TCP-based inference server for privacy-preserving XGBoost inference.
+//! Minimal demo of the `InferenceService` gRPC contract.
 //!
-//! Demonstrates the transport serialization layer by accepting clients over TCP,
-//! receiving encrypted inputs, and returning encrypted scores. Uses prost-encoded
-//! messages (Protocol Buffer wire format) framed with a 1-byte message type and a
-//! 4-byte little-endian length prefix.
-//!
-//! Each TCP connection may carry multiple framed messages: typically one
-//! `InitSession` followed by N `Predict` requests. The handler loops until the
-//! peer closes the stream.
+//! Implements the generated [`InferenceService`] trait, registers a single
+//! pre-loaded model, and serves it under `tonic::transport::Server`.
+//! Production deployments will want to layer their own TLS, interceptors,
+//! tracing, and rate limits on top — this binary stays intentionally short
+//! so the protocol itself is easy to read.
 //!
 //! Usage:
 //!   cargo run --release --example server --features transport -- \
 //!     --model tests/fixtures/trained_binary.ubj [--port 9999]
 
 use std::collections::HashMap;
-use std::io::{ErrorKind, Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::sync::{Arc, Mutex};
-use std::thread;
+use std::net::SocketAddr;
+use std::sync::Arc;
 
-use prost::Message as _;
+use tokio::sync::Mutex;
+use tonic::transport::Server;
+use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
 use weirwood::{
@@ -27,232 +24,156 @@ use weirwood::{
     fhe::FheEvaluator,
     model::WeirwoodTree,
     transport::{
-        deserialize_feature, deserialize_server_context,
-        rpc::{InitSessionRequest, InitSessionResponse, PredictRequest, PredictResponse},
+        InferenceService, InferenceServiceServer, InitSessionRequest, InitSessionResponse,
+        PredictRequest, PredictResponse, deserialize_feature, deserialize_server_context,
         serialize_score,
     },
 };
 
+/// Generous upper bound on a serialized `ServerKey` (~180 MB for the default
+/// `tfhe-rs 1.6` parameter set, plus headroom). Mirrors the limit applied on
+/// the client side.
+const MAX_GRPC_MESSAGE_BYTES: usize = 512 * 1024 * 1024;
+
 type SessionMap = Arc<Mutex<HashMap<String, FheEvaluator>>>;
 
-/// Read one framed message: 4-byte little-endian length, then `len` bytes.
-/// Returns `Ok(None)` on clean EOF before any byte of the frame is read.
-fn read_frame(stream: &mut TcpStream) -> std::io::Result<Option<Vec<u8>>> {
-    let mut len_bytes = [0u8; 4];
-    match stream.read_exact(&mut len_bytes) {
-        Ok(()) => {}
-        Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(None),
-        Err(e) => return Err(e),
-    }
-    let len = u32::from_le_bytes(len_bytes) as usize;
-    let mut buf = vec![0u8; len];
-    stream.read_exact(&mut buf)?;
-    Ok(Some(buf))
+struct WeirwoodInference {
+    model: Arc<WeirwoodTree>,
+    sessions: SessionMap,
 }
 
-fn write_frame(stream: &mut TcpStream, buf: &[u8]) -> std::io::Result<()> {
-    stream.write_all(&(buf.len() as u32).to_le_bytes())?;
-    stream.write_all(buf)
-}
+#[tonic::async_trait]
+impl InferenceService for WeirwoodInference {
+    async fn init_session(
+        &self,
+        request: Request<InitSessionRequest>,
+    ) -> Result<Response<InitSessionResponse>, Status> {
+        let req = request.into_inner();
 
-fn handle_init(stream: &mut TcpStream, sessions: &SessionMap) -> std::io::Result<()> {
-    let buf = match read_frame(stream)? {
-        Some(b) => b,
-        None => return Ok(()),
-    };
+        let server_ctx = deserialize_server_context(&req.server_key).map_err(|e| {
+            Status::invalid_argument(format!("failed to deserialize server key: {e}"))
+        })?;
 
-    let req = match InitSessionRequest::decode(buf.as_slice()) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("[error] Failed to decode InitSessionRequest: {}", e);
-            return Ok(());
-        }
-    };
+        // FheEvaluator construction installs the key on its worker threads;
+        // it does not block on FHE work, but key cloning is a few hundred ms,
+        // so we run it in `spawn_blocking` to avoid stalling the runtime.
+        let evaluator = tokio::task::spawn_blocking(move || FheEvaluator::new(server_ctx))
+            .await
+            .map_err(|e| Status::internal(format!("evaluator construction panicked: {e}")))?;
 
-    let server_ctx = match deserialize_server_context(&req.server_key) {
-        Ok(ctx) => ctx,
-        Err(e) => {
-            eprintln!("[error] Failed to deserialize server key: {}", e);
-            return Ok(());
-        }
-    };
+        let session_id = Uuid::new_v4().to_string();
+        self.sessions
+            .lock()
+            .await
+            .insert(session_id.clone(), evaluator);
 
-    println!(
-        "[init] Creating evaluator (server key {} MB)",
-        req.server_key.len() / 1_000_000
-    );
-    let evaluator = FheEvaluator::new(server_ctx);
+        println!(
+            "[init] Session {session_id} created (server key {} MB)",
+            req.server_key.len() / 1_000_000
+        );
 
-    let session_id = Uuid::new_v4().to_string();
-    sessions
-        .lock()
-        .unwrap()
-        .insert(session_id.clone(), evaluator);
-
-    let resp = InitSessionResponse {
-        session_id: session_id.clone(),
-    };
-    let mut out = Vec::new();
-    if let Err(e) = resp.encode(&mut out) {
-        eprintln!("[error] Failed to encode response: {}", e);
-        return Ok(());
-    }
-    write_frame(stream, &out)?;
-
-    println!("[init] Session {} created", session_id);
-    Ok(())
-}
-
-fn handle_predict(
-    stream: &mut TcpStream,
-    model: &WeirwoodTree,
-    sessions: &SessionMap,
-) -> std::io::Result<()> {
-    let buf = match read_frame(stream)? {
-        Some(b) => b,
-        None => return Ok(()),
-    };
-
-    let req = match PredictRequest::decode(buf.as_slice()) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("[error] Failed to decode PredictRequest: {}", e);
-            return Ok(());
-        }
-    };
-
-    let mut features = Vec::with_capacity(req.features.len());
-    for feature_bytes in &req.features {
-        match deserialize_feature(feature_bytes) {
-            Ok(f) => features.push(f),
-            Err(e) => {
-                eprintln!("[error] Failed to deserialize feature: {}", e);
-                return Ok(());
-            }
-        }
+        Ok(Response::new(InitSessionResponse { session_id }))
     }
 
-    let encrypted_score = {
-        let mut sess = sessions.lock().unwrap();
-        match sess.get_mut(&req.session_id) {
-            Some(evaluator) => evaluator.predict(model, &features),
-            None => {
-                eprintln!("[error] Session {} not found", req.session_id);
-                return Ok(());
-            }
-        }
-    };
+    async fn predict(
+        &self,
+        request: Request<PredictRequest>,
+    ) -> Result<Response<PredictResponse>, Status> {
+        let req = request.into_inner();
 
-    let score_bytes = match serialize_score(&encrypted_score) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("[error] Failed to serialize score: {}", e);
-            return Ok(());
-        }
-    };
-
-    let resp = PredictResponse {
-        encrypted_score: score_bytes.into(),
-    };
-    let mut out = Vec::new();
-    if let Err(e) = resp.encode(&mut out) {
-        eprintln!("[error] Failed to encode response: {}", e);
-        return Ok(());
-    }
-    write_frame(stream, &out)?;
-
-    println!(
-        "[predict] Session {} completed ({} features)",
-        req.session_id,
-        features.len()
-    );
-    Ok(())
-}
-
-fn handle_client(mut stream: TcpStream, model: Arc<WeirwoodTree>, sessions: SessionMap) {
-    let peer_addr = stream.peer_addr().ok();
-    println!("[connection] Client connected from {:?}", peer_addr);
-
-    loop {
-        let mut msg_type = [0u8; 1];
-        match stream.read_exact(&mut msg_type) {
-            Ok(()) => {}
-            Err(e) if e.kind() == ErrorKind::UnexpectedEof => {
-                println!("[connection] Client {:?} disconnected", peer_addr);
-                return;
-            }
-            Err(e) => {
-                eprintln!("[error] Failed to read message type: {}", e);
-                return;
-            }
+        let mut features = Vec::with_capacity(req.features.len());
+        for feature_bytes in &req.features {
+            features.push(
+                deserialize_feature(feature_bytes)
+                    .map_err(|e| Status::invalid_argument(format!("bad feature bytes: {e}")))?,
+            );
         }
 
-        let result = match msg_type[0] {
-            0 => handle_init(&mut stream, &sessions),
-            1 => handle_predict(&mut stream, &model, &sessions),
-            other => {
-                eprintln!("[error] Unknown message type: {}", other);
-                return;
-            }
-        };
+        let model = Arc::clone(&self.model);
+        let sessions = Arc::clone(&self.sessions);
+        let session_id = req.session_id.clone();
 
-        if let Err(e) = result {
-            eprintln!("[error] Connection error: {}", e);
-            return;
-        }
+        // Move the multi-second FHE evaluation onto a blocking thread so the
+        // tonic runtime stays responsive. We hold the session lock only long
+        // enough to look up the evaluator, then release it before doing the
+        // actual work — concurrent predicts on different sessions can run
+        // truly in parallel.
+        let encrypted_score = tokio::task::spawn_blocking(move || {
+            let mut guard = sessions.blocking_lock();
+            let evaluator = guard
+                .get_mut(&session_id)
+                .ok_or_else(|| Status::not_found(format!("session {session_id} not found")))?;
+            Ok::<_, Status>(evaluator.predict(&model, &features))
+        })
+        .await
+        .map_err(|e| Status::internal(format!("predict task panicked: {e}")))??;
+
+        let score_bytes = serialize_score(&encrypted_score)
+            .map_err(|e| Status::internal(format!("failed to serialize score: {e}")))?;
+
+        println!("[predict] Session {} completed", req.session_id);
+
+        Ok(Response::new(PredictResponse {
+            encrypted_score: score_bytes,
+        }))
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main(flavor = "multi_thread")]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mut model_path = "tests/fixtures/trained_binary.ubj".to_string();
-    let mut port = 9999u16;
+    let mut port: u16 = 9999;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--model" => {
-                model_path = args.next().expect("--model requires a path");
-            }
+            "--model" => model_path = args.next().expect("--model requires a path"),
             "--port" => {
                 port = args
                     .next()
                     .expect("--port requires a number")
                     .parse()
-                    .expect("invalid port");
+                    .expect("invalid port")
             }
-            _ => eprintln!("unknown argument: {}", arg),
+            other => eprintln!("unknown argument: {other}"),
         }
     }
 
-    println!("Loading model from {}…", model_path);
+    println!("Loading model from {model_path}…");
     let model = if model_path.ends_with(".ubj") {
         WeirwoodTree::from_ubj_file(&model_path)?
     } else {
         WeirwoodTree::from_json_file(&model_path)?
     };
-
+    let warnings = model.validate_for_fhe();
+    for w in &warnings {
+        eprintln!("warning: {w}");
+    }
+    if !warnings.is_empty() {
+        return Err(format!("model has {} FHE-safety warnings; refusing to start", warnings.len()).into());
+    }
     println!(
         "Model: {} trees, {} features",
         model.trees.len(),
         model.num_features
     );
 
-    let model = Arc::new(model);
-    let sessions: SessionMap = Arc::new(Mutex::new(HashMap::new()));
+    let svc = WeirwoodInference {
+        model: Arc::new(model),
+        sessions: Arc::new(Mutex::new(HashMap::new())),
+    };
 
-    let listener = TcpListener::bind(format!("127.0.0.1:{}", port))?;
-    println!("Server listening on 127.0.0.1:{}", port);
+    let addr: SocketAddr = format!("127.0.0.1:{port}").parse()?;
+    println!("Inference server listening on {addr}");
 
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                let model = model.clone();
-                let sessions = sessions.clone();
-                thread::spawn(move || handle_client(stream, model, sessions));
-            }
-            Err(e) => eprintln!("[error] Failed to accept connection: {}", e),
-        }
-    }
+    Server::builder()
+        .add_service(
+            InferenceServiceServer::new(svc)
+                .max_decoding_message_size(MAX_GRPC_MESSAGE_BYTES)
+                .max_encoding_message_size(MAX_GRPC_MESSAGE_BYTES),
+        )
+        .serve(addr)
+        .await?;
 
     Ok(())
 }
