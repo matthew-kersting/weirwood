@@ -1,6 +1,9 @@
-//! Protocol Buffer message types for gRPC transport, defined using prost.
+//! Protocol Buffer message types used by the example TCP transport, defined
+//! with `prost` attributes (no `protoc` dependency).
 //!
-//! This avoids the protoc dependency by defining types directly in Rust with prost attributes.
+//! These messages use the standard protobuf wire format and could be adapted
+//! to gRPC in the future, but the bundled `examples/server.rs` and
+//! `examples/client.rs` frame them directly over a raw TCP socket.
 
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct InitSessionRequest {

@@ -1,8 +1,11 @@
-//! Serialization helpers and gRPC types for transporting FHE types over the wire.
+//! Serialization helpers and Protocol Buffer message types for transporting
+//! FHE artifacts over the wire.
 //!
-//! Provides functions to serialize and deserialize `ServerContext` and encrypted
-//! data types using TFHE's native serialization format. Intended for use with
-//! gRPC or other network protocols.
+//! Provides functions to serialize and deserialize `ServerContext` and
+//! encrypted data types using `tfhe-rs`' versioned `safe_serialize` /
+//! `safe_deserialize` format. The bundled examples frame these bytes directly
+//! over TCP; the same payloads could equally be carried by gRPC or any other
+//! length-prefixed protocol.
 
 pub mod rpc;
 
@@ -17,12 +20,12 @@ const SIZE_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Serialize a `ServerKey` from a `ServerContext` to bytes using TFHE's safe serialization.
 ///
-/// The resulting bytes (~100-200 MB) are suitable for transmission over gRPC
-/// or other network protocols. The serialization includes versioning information.
+/// The resulting bytes (~100–200 MB) are suitable for transmission over any
+/// length-prefixed transport. The serialization includes versioning information.
 pub fn serialize_server_context(ctx: &ServerContext) -> Result<Vec<u8>, Error> {
     let mut buf = Vec::new();
     safe_serialize(&ctx.server_key, &mut buf, SIZE_LIMIT_BYTES)
-        .map_err(|e| Error::Other(format!("failed to serialize server key: {}", e)))?;
+        .map_err(|e| Error::Fhe(format!("failed to serialize server key: {}", e)))?;
     Ok(buf)
 }
 
@@ -32,7 +35,7 @@ pub fn serialize_server_context(ctx: &ServerContext) -> Result<Vec<u8>, Error> {
 pub fn deserialize_server_context(bytes: &[u8]) -> Result<ServerContext, Error> {
     let mut reader = Cursor::new(bytes);
     let server_key: tfhe::ServerKey = safe_deserialize(&mut reader, SIZE_LIMIT_BYTES)
-        .map_err(|e| Error::Other(format!("failed to deserialize server key: {}", e)))?;
+        .map_err(|e| Error::Fhe(format!("failed to deserialize server key: {}", e)))?;
     Ok(ServerContext::from_key(server_key))
 }
 
@@ -40,7 +43,7 @@ pub fn deserialize_server_context(bytes: &[u8]) -> Result<ServerContext, Error> 
 pub fn serialize_feature(feature: &tfhe::FheInt32) -> Result<Vec<u8>, Error> {
     let mut buf = Vec::new();
     safe_serialize(feature, &mut buf, SIZE_LIMIT_BYTES)
-        .map_err(|e| Error::Other(format!("failed to serialize feature: {}", e)))?;
+        .map_err(|e| Error::Fhe(format!("failed to serialize feature: {}", e)))?;
     Ok(buf)
 }
 
@@ -48,14 +51,14 @@ pub fn serialize_feature(feature: &tfhe::FheInt32) -> Result<Vec<u8>, Error> {
 pub fn deserialize_feature(bytes: &[u8]) -> Result<tfhe::FheInt32, Error> {
     let mut reader = Cursor::new(bytes);
     safe_deserialize(&mut reader, SIZE_LIMIT_BYTES)
-        .map_err(|e| Error::Other(format!("failed to deserialize feature: {}", e)))
+        .map_err(|e| Error::Fhe(format!("failed to deserialize feature: {}", e)))
 }
 
 /// Serialize an encrypted score to bytes.
 pub fn serialize_score(score: &EncryptedScore) -> Result<Vec<u8>, Error> {
     let mut buf = Vec::new();
     safe_serialize(score, &mut buf, SIZE_LIMIT_BYTES)
-        .map_err(|e| Error::Other(format!("failed to serialize encrypted score: {}", e)))?;
+        .map_err(|e| Error::Fhe(format!("failed to serialize encrypted score: {}", e)))?;
     Ok(buf)
 }
 
@@ -63,7 +66,7 @@ pub fn serialize_score(score: &EncryptedScore) -> Result<Vec<u8>, Error> {
 pub fn deserialize_score(bytes: &[u8]) -> Result<EncryptedScore, Error> {
     let mut reader = Cursor::new(bytes);
     safe_deserialize(&mut reader, SIZE_LIMIT_BYTES)
-        .map_err(|e| Error::Other(format!("failed to deserialize encrypted score: {}", e)))
+        .map_err(|e| Error::Fhe(format!("failed to deserialize encrypted score: {}", e)))
 }
 
 /// Serialize an encrypted input (feature vector) to bytes.

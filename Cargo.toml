@@ -12,7 +12,7 @@ readme = "README.md"
 exclude = ["weirwood_1pager.md", "benchmarks/"]
 
 [features]
-transport = ["dep:tonic", "dep:prost", "dep:tokio"]
+transport = ["dep:prost"]
 
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
@@ -24,21 +24,9 @@ rayon = "1.11.0"
 version = "1.6.1"
 features = ["shortint", "integer"]
 
-[dependencies.tonic]
-version = "0.14"
-optional = true
-
 [dependencies.prost]
 version = "0.14"
 optional = true
-
-[dependencies.tokio]
-version = "1.52"
-features = ["rt-multi-thread", "macros", "sync"]
-optional = true
-
-[build-dependencies]
-tonic-build = "0.14"
 
 [dev-dependencies]
 approx = "0.5.1"
@@ -50,4 +38,8 @@ required-features = ["transport"]
 
 [[example]]
 name = "client"
+required-features = ["transport"]
+
+[[example]]
+name = "measure_transport_sizes"
 required-features = ["transport"]

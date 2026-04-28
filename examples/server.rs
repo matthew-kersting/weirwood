@@ -2,14 +2,19 @@
 //!
 //! Demonstrates the transport serialization layer by accepting clients over TCP,
 //! receiving encrypted inputs, and returning encrypted scores. Uses prost-encoded
-//! messages (same format as gRPC protocol buffers) for a wire-compatible transport.
+//! messages (Protocol Buffer wire format) framed with a 1-byte message type and a
+//! 4-byte little-endian length prefix.
+//!
+//! Each TCP connection may carry multiple framed messages: typically one
+//! `InitSession` followed by N `Predict` requests. The handler loops until the
+//! peer closes the stream.
 //!
 //! Usage:
 //!   cargo run --release --example server --features transport -- \
 //!     --model tests/fixtures/trained_binary.ubj [--port 9999]
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -30,151 +35,170 @@ use weirwood::{
 
 type SessionMap = Arc<Mutex<HashMap<String, FheEvaluator>>>;
 
+/// Read one framed message: 4-byte little-endian length, then `len` bytes.
+/// Returns `Ok(None)` on clean EOF before any byte of the frame is read.
+fn read_frame(stream: &mut TcpStream) -> std::io::Result<Option<Vec<u8>>> {
+    let mut len_bytes = [0u8; 4];
+    match stream.read_exact(&mut len_bytes) {
+        Ok(()) => {}
+        Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(None),
+        Err(e) => return Err(e),
+    }
+    let len = u32::from_le_bytes(len_bytes) as usize;
+    let mut buf = vec![0u8; len];
+    stream.read_exact(&mut buf)?;
+    Ok(Some(buf))
+}
+
+fn write_frame(stream: &mut TcpStream, buf: &[u8]) -> std::io::Result<()> {
+    stream.write_all(&(buf.len() as u32).to_le_bytes())?;
+    stream.write_all(buf)
+}
+
+fn handle_init(stream: &mut TcpStream, sessions: &SessionMap) -> std::io::Result<()> {
+    let buf = match read_frame(stream)? {
+        Some(b) => b,
+        None => return Ok(()),
+    };
+
+    let req = match InitSessionRequest::decode(buf.as_slice()) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[error] Failed to decode InitSessionRequest: {}", e);
+            return Ok(());
+        }
+    };
+
+    let server_ctx = match deserialize_server_context(&req.server_key) {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            eprintln!("[error] Failed to deserialize server key: {}", e);
+            return Ok(());
+        }
+    };
+
+    println!(
+        "[init] Creating evaluator (server key {} MB)",
+        req.server_key.len() / 1_000_000
+    );
+    let evaluator = FheEvaluator::new(server_ctx);
+
+    let session_id = Uuid::new_v4().to_string();
+    sessions
+        .lock()
+        .unwrap()
+        .insert(session_id.clone(), evaluator);
+
+    let resp = InitSessionResponse {
+        session_id: session_id.clone(),
+    };
+    let mut out = Vec::new();
+    if let Err(e) = resp.encode(&mut out) {
+        eprintln!("[error] Failed to encode response: {}", e);
+        return Ok(());
+    }
+    write_frame(stream, &out)?;
+
+    println!("[init] Session {} created", session_id);
+    Ok(())
+}
+
+fn handle_predict(
+    stream: &mut TcpStream,
+    model: &WeirwoodTree,
+    sessions: &SessionMap,
+) -> std::io::Result<()> {
+    let buf = match read_frame(stream)? {
+        Some(b) => b,
+        None => return Ok(()),
+    };
+
+    let req = match PredictRequest::decode(buf.as_slice()) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[error] Failed to decode PredictRequest: {}", e);
+            return Ok(());
+        }
+    };
+
+    let mut features = Vec::with_capacity(req.features.len());
+    for feature_bytes in &req.features {
+        match deserialize_feature(feature_bytes) {
+            Ok(f) => features.push(f),
+            Err(e) => {
+                eprintln!("[error] Failed to deserialize feature: {}", e);
+                return Ok(());
+            }
+        }
+    }
+
+    let encrypted_score = {
+        let mut sess = sessions.lock().unwrap();
+        match sess.get_mut(&req.session_id) {
+            Some(evaluator) => evaluator.predict(model, &features),
+            None => {
+                eprintln!("[error] Session {} not found", req.session_id);
+                return Ok(());
+            }
+        }
+    };
+
+    let score_bytes = match serialize_score(&encrypted_score) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("[error] Failed to serialize score: {}", e);
+            return Ok(());
+        }
+    };
+
+    let resp = PredictResponse {
+        encrypted_score: score_bytes.into(),
+    };
+    let mut out = Vec::new();
+    if let Err(e) = resp.encode(&mut out) {
+        eprintln!("[error] Failed to encode response: {}", e);
+        return Ok(());
+    }
+    write_frame(stream, &out)?;
+
+    println!(
+        "[predict] Session {} completed ({} features)",
+        req.session_id,
+        features.len()
+    );
+    Ok(())
+}
+
 fn handle_client(mut stream: TcpStream, model: Arc<WeirwoodTree>, sessions: SessionMap) {
     let peer_addr = stream.peer_addr().ok();
     println!("[connection] Client connected from {:?}", peer_addr);
 
-    // Read message type (1 byte): 0 = InitSession, 1 = Predict
-    let mut msg_type = [0u8; 1];
-    if stream.read_exact(&mut msg_type).is_err() {
-        eprintln!("[error] Failed to read message type");
-        return;
-    }
-
-    match msg_type[0] {
-        // InitSession request
-        0 => {
-            let mut len_bytes = [0u8; 4];
-            if stream.read_exact(&mut len_bytes).is_err() {
-                eprintln!("[error] Failed to read message length");
+    loop {
+        let mut msg_type = [0u8; 1];
+        match stream.read_exact(&mut msg_type) {
+            Ok(()) => {}
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => {
+                println!("[connection] Client {:?} disconnected", peer_addr);
                 return;
             }
-            let len = u32::from_le_bytes(len_bytes) as usize;
-
-            let mut buf = vec![0u8; len];
-            if stream.read_exact(&mut buf).is_err() {
-                eprintln!("[error] Failed to read message");
+            Err(e) => {
+                eprintln!("[error] Failed to read message type: {}", e);
                 return;
-            }
-
-            match InitSessionRequest::decode(buf.as_slice()) {
-                Ok(req) => {
-                    let session_id = Uuid::new_v4().to_string();
-
-                    match weirwood::transport::deserialize_server_context(&req.server_key) {
-                        Ok(server_ctx) => {
-                            println!(
-                                "[init] Creating evaluator (server key {} MB)",
-                                req.server_key.len() / 1_000_000
-                            );
-                            let evaluator = FheEvaluator::new(server_ctx);
-
-                            let mut sess = sessions.lock().unwrap();
-                            sess.insert(session_id.clone(), evaluator);
-                            drop(sess);
-
-                            let resp = InitSessionResponse {
-                                session_id: session_id.clone(),
-                            };
-
-                            let mut buf = Vec::new();
-                            if let Err(e) = resp.encode(&mut buf) {
-                                eprintln!("[error] Failed to encode response: {}", e);
-                                return;
-                            }
-
-                            let _ = stream.write_all(&(buf.len() as u32).to_le_bytes());
-                            let _ = stream.write_all(&buf);
-
-                            println!("[init] Session {} created", session_id);
-                        }
-                        Err(e) => {
-                            eprintln!("[error] Failed to deserialize server key: {}", e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("[error] Failed to decode InitSessionRequest: {}", e);
-                }
             }
         }
 
-        // Predict request
-        1 => {
-            let mut len_bytes = [0u8; 4];
-            if stream.read_exact(&mut len_bytes).is_err() {
-                eprintln!("[error] Failed to read message length");
+        let result = match msg_type[0] {
+            0 => handle_init(&mut stream, &sessions),
+            1 => handle_predict(&mut stream, &model, &sessions),
+            other => {
+                eprintln!("[error] Unknown message type: {}", other);
                 return;
             }
-            let len = u32::from_le_bytes(len_bytes) as usize;
+        };
 
-            let mut buf = vec![0u8; len];
-            if stream.read_exact(&mut buf).is_err() {
-                eprintln!("[error] Failed to read message");
-                return;
-            }
-
-            match PredictRequest::decode(buf.as_slice()) {
-                Ok(req) => {
-                    // Deserialize features first (outside the lock)
-                    let mut features = Vec::new();
-                    for feature_bytes in req.features {
-                        match deserialize_feature(&feature_bytes) {
-                            Ok(feature) => features.push(feature),
-                            Err(e) => {
-                                eprintln!("[error] Failed to deserialize feature: {}", e);
-                                return;
-                            }
-                        }
-                    }
-
-                    // Get evaluator from sessions
-                    let encrypted_score = {
-                        let mut sess = sessions.lock().unwrap();
-                        match sess.get_mut(&req.session_id) {
-                            Some(evaluator) => evaluator.predict(&model, &features),
-                            None => {
-                                eprintln!("[error] Session {} not found", req.session_id);
-                                return;
-                            }
-                        }
-                    };
-
-                    // Serialize result
-                    match serialize_score(&encrypted_score) {
-                        Ok(score_bytes) => {
-                            let resp = PredictResponse {
-                                encrypted_score: score_bytes.into(),
-                            };
-
-                            let mut buf = Vec::new();
-                            if let Err(e) = resp.encode(&mut buf) {
-                                eprintln!("[error] Failed to encode response: {}", e);
-                                return;
-                            }
-
-                            let _ = stream.write_all(&(buf.len() as u32).to_le_bytes());
-                            let _ = stream.write_all(&buf);
-
-                            println!(
-                                "[predict] Session {} completed ({} features)",
-                                req.session_id,
-                                features.len()
-                            );
-                        }
-                        Err(e) => {
-                            eprintln!("[error] Failed to serialize score: {}", e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("[error] Failed to decode PredictRequest: {}", e);
-                }
-            }
-        }
-
-        _ => {
-            eprintln!("[error] Unknown message type: {}", msg_type[0]);
+        if let Err(e) = result {
+            eprintln!("[error] Connection error: {}", e);
+            return;
         }
     }
 }
