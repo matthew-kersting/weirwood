@@ -220,14 +220,14 @@ mod tests {
     #[test]
     fn plaintext_left_branch() {
         let tree: WeirwoodTree = tiny_tree();
-        let score: f32 = PlaintextEvaluator.predict(&tree, &vec![0.5]);
+        let score: f32 = PlaintextEvaluator.predict(&tree, &[0.5]);
         approx::assert_abs_diff_eq!(score, -0.5, epsilon = 1e-6);
     }
 
     #[test]
     fn plaintext_right_branch() {
         let tree: WeirwoodTree = tiny_tree();
-        let score: f32 = PlaintextEvaluator.predict(&tree, &vec![2.0]);
+        let score: f32 = PlaintextEvaluator.predict(&tree, &[2.0]);
         approx::assert_abs_diff_eq!(score, 0.5, epsilon = 1e-6);
     }
 
@@ -236,14 +236,14 @@ mod tests {
     #[test]
     fn boundary_at_threshold_goes_left() {
         let tree: WeirwoodTree = tiny_tree();
-        let score: f32 = PlaintextEvaluator.predict(&tree, &vec![1.0]);
+        let score: f32 = PlaintextEvaluator.predict(&tree, &[1.0]);
         approx::assert_abs_diff_eq!(score, -0.5, epsilon = 1e-6);
     }
 
     #[test]
     fn just_above_threshold_goes_right() {
         let tree: WeirwoodTree = tiny_tree();
-        let score: f32 = PlaintextEvaluator.predict(&tree, &vec![1.0001]);
+        let score: f32 = PlaintextEvaluator.predict(&tree, &[1.0001]);
         approx::assert_abs_diff_eq!(score, 0.5, epsilon = 1e-6);
     }
 
@@ -255,7 +255,7 @@ mod tests {
     fn depth2_left_left() {
         // feature[0]=1.0 (<=5→left), feature[1]=1.0 (<=2→left) → leaf -1.0
         let tree: WeirwoodTree = deep_tree();
-        let score: f32 = PlaintextEvaluator.predict(&tree, &vec![1.0, 1.0]);
+        let score: f32 = PlaintextEvaluator.predict(&tree, &[1.0, 1.0]);
         approx::assert_abs_diff_eq!(score, -1.0, epsilon = 1e-6);
     }
 
@@ -263,7 +263,7 @@ mod tests {
     fn depth2_left_right() {
         // feature[0]=1.0 (<=5→left), feature[1]=3.0 (>2→right) → leaf 0.5
         let tree: WeirwoodTree = deep_tree();
-        let score: f32 = PlaintextEvaluator.predict(&tree, &vec![1.0, 3.0]);
+        let score: f32 = PlaintextEvaluator.predict(&tree, &[1.0, 3.0]);
         approx::assert_abs_diff_eq!(score, 0.5, epsilon = 1e-6);
     }
 
@@ -271,7 +271,7 @@ mod tests {
     fn depth2_right() {
         // feature[0]=6.0 (>5→right) → leaf 1.0 (never looks at feature[1])
         let tree: WeirwoodTree = deep_tree();
-        let score: f32 = PlaintextEvaluator.predict(&tree, &vec![6.0, 99.0]);
+        let score: f32 = PlaintextEvaluator.predict(&tree, &[6.0, 99.0]);
         approx::assert_abs_diff_eq!(score, 1.0, epsilon = 1e-6);
     }
 
@@ -308,8 +308,8 @@ mod tests {
             num_features: 2,
         };
         // feature[0] is irrelevant; split is on feature[1]
-        let left_score: f32 = PlaintextEvaluator.predict(&tree, &vec![999.0, 0.0]);
-        let right_score: f32 = PlaintextEvaluator.predict(&tree, &vec![0.0, 1.0]);
+        let left_score: f32 = PlaintextEvaluator.predict(&tree, &[999.0, 0.0]);
+        let right_score: f32 = PlaintextEvaluator.predict(&tree, &[0.0, 1.0]);
         approx::assert_abs_diff_eq!(left_score, -1.0, epsilon = 1e-6);
         approx::assert_abs_diff_eq!(right_score, 1.0, epsilon = 1e-6);
     }
@@ -355,13 +355,13 @@ mod tests {
         };
         // Both left: -0.3 + -0.2 = -0.5
         approx::assert_abs_diff_eq!(
-            PlaintextEvaluator.predict(&tree, &vec![0.0]),
+            PlaintextEvaluator.predict(&tree, &[0.0]),
             -0.5,
             epsilon = 1e-6
         );
         // Both right: 0.3 + 0.2 = 0.5
         approx::assert_abs_diff_eq!(
-            PlaintextEvaluator.predict(&tree, &vec![2.0]),
+            PlaintextEvaluator.predict(&tree, &[2.0]),
             0.5,
             epsilon = 1e-6
         );
@@ -373,7 +373,7 @@ mod tests {
         tree.base_score = 2.0;
         // left branch gives -0.5 + 2.0 = 1.5
         approx::assert_abs_diff_eq!(
-            PlaintextEvaluator.predict(&tree, &vec![0.5]),
+            PlaintextEvaluator.predict(&tree, &[0.5]),
             1.5,
             epsilon = 1e-6
         );
@@ -388,7 +388,7 @@ mod tests {
             num_features: 1,
         };
         approx::assert_abs_diff_eq!(
-            PlaintextEvaluator.predict(&tree, &vec![1.0]),
+            PlaintextEvaluator.predict(&tree, &[1.0]),
             0.5,
             epsilon = 1e-6
         );
@@ -401,7 +401,7 @@ mod tests {
     #[test]
     fn sigmoid_sanity() {
         let tree: WeirwoodTree = tiny_tree();
-        let probability: f32 = PlaintextEvaluator.predict_proba(&tree, &vec![2.0]);
+        let probability: f32 = PlaintextEvaluator.predict_proba(&tree, &[2.0]);
         assert!(probability > 0.5 && probability < 1.0);
     }
 
@@ -438,7 +438,7 @@ mod tests {
             num_features: 1,
         };
         approx::assert_abs_diff_eq!(
-            PlaintextEvaluator.predict_proba(&tree, &vec![0.5]),
+            PlaintextEvaluator.predict_proba(&tree, &[0.5]),
             0.5,
             epsilon = 1e-6
         );
@@ -450,12 +450,12 @@ mod tests {
         // sigmoid( 0.5) ≈ 0.62245934
         let tree: WeirwoodTree = tiny_tree();
         approx::assert_abs_diff_eq!(
-            PlaintextEvaluator.predict_proba(&tree, &vec![0.0]), // left → raw=-0.5
+            PlaintextEvaluator.predict_proba(&tree, &[0.0]), // left → raw=-0.5
             0.37754066_f32,
             epsilon = 1e-5
         );
         approx::assert_abs_diff_eq!(
-            PlaintextEvaluator.predict_proba(&tree, &vec![2.0]), // right → raw=0.5
+            PlaintextEvaluator.predict_proba(&tree, &[2.0]), // right → raw=0.5
             0.62245934_f32,
             epsilon = 1e-5
         );
@@ -468,7 +468,7 @@ mod tests {
         tree.base_score = 1.0;
         // right branch: 0.5 + base 1.0 = 1.5 — no activation applied
         approx::assert_abs_diff_eq!(
-            PlaintextEvaluator.predict_proba(&tree, &vec![2.0]),
+            PlaintextEvaluator.predict_proba(&tree, &[2.0]),
             1.5,
             epsilon = 1e-6
         );
@@ -479,7 +479,7 @@ mod tests {
         let mut tree: WeirwoodTree = tiny_tree();
         tree.objective = Objective::Other("custom:loss".into());
         approx::assert_abs_diff_eq!(
-            PlaintextEvaluator.predict_proba(&tree, &vec![0.0]),
+            PlaintextEvaluator.predict_proba(&tree, &[0.0]),
             -0.5,
             epsilon = 1e-6
         );
@@ -580,7 +580,7 @@ mod tests {
     fn multiclass_routes_trees_by_class_index() {
         let tree = three_class_model();
         // feature=1.0 → only the class-1 stump fires.
-        let raw = PlaintextEvaluator.predict_multiclass(&tree, &vec![1.0]);
+        let raw = PlaintextEvaluator.predict_multiclass(&tree, &[1.0]);
         assert_eq!(raw.len(), 3);
         approx::assert_abs_diff_eq!(raw[0], 0.0, epsilon = 1e-6);
         approx::assert_abs_diff_eq!(raw[1], 1.0, epsilon = 1e-6);
@@ -590,7 +590,7 @@ mod tests {
     #[test]
     fn multiclass_proba_argmax_matches_dominant_class() {
         let tree = three_class_model();
-        let p = PlaintextEvaluator.predict_multiclass_proba(&tree, &vec![2.0]);
+        let p = PlaintextEvaluator.predict_multiclass_proba(&tree, &[2.0]);
         let sum: f32 = p.iter().sum();
         approx::assert_abs_diff_eq!(sum, 1.0, epsilon = 1e-6);
         let argmax = p
@@ -608,12 +608,12 @@ mod tests {
         tree.base_score = 0.25;
         // feature far from every stump's selected value → all stumps return 0.0;
         // each class's raw score should be exactly base_score.
-        let raw = PlaintextEvaluator.predict_multiclass(&tree, &vec![10.0]);
+        let raw = PlaintextEvaluator.predict_multiclass(&tree, &[10.0]);
         approx::assert_abs_diff_eq!(raw[0], 0.25, epsilon = 1e-6);
         approx::assert_abs_diff_eq!(raw[1], 0.25, epsilon = 1e-6);
         approx::assert_abs_diff_eq!(raw[2], 0.25, epsilon = 1e-6);
         // Equal logits → uniform softmax.
-        let p = PlaintextEvaluator.predict_multiclass_proba(&tree, &vec![10.0]);
+        let p = PlaintextEvaluator.predict_multiclass_proba(&tree, &[10.0]);
         approx::assert_abs_diff_eq!(p[0], 1.0 / 3.0, epsilon = 1e-6);
         approx::assert_abs_diff_eq!(p[1], 1.0 / 3.0, epsilon = 1e-6);
         approx::assert_abs_diff_eq!(p[2], 1.0 / 3.0, epsilon = 1e-6);
@@ -624,13 +624,13 @@ mod tests {
     fn predict_proba_panics_on_multiclass_objective() {
         let mut tree = tiny_tree();
         tree.objective = Objective::MultiSoftmax { num_class: 3 };
-        let _ = PlaintextEvaluator.predict_proba(&tree, &vec![0.5]);
+        let _ = PlaintextEvaluator.predict_proba(&tree, &[0.5]);
     }
 
     #[test]
     #[should_panic(expected = "MultiSoftmax")]
     fn predict_multiclass_panics_on_binary_objective() {
         let tree = tiny_tree(); // BinaryLogistic
-        let _ = PlaintextEvaluator.predict_multiclass(&tree, &vec![0.5]);
+        let _ = PlaintextEvaluator.predict_multiclass(&tree, &[0.5]);
     }
 }

@@ -126,8 +126,8 @@ fn main() -> Result<(), weirwood::Error> {
     // For each test point: client encrypts → server evaluates → client decrypts
     // -----------------------------------------------------------------------
     println!(
-        "  {:<22}  {:<12}  {:<12}  {:<12}  {:<12}  {}",
-        "features", "plain_raw", "plain_proba", "fhe_raw", "fhe_proba", "FHE latency"
+        "  {:<22}  {:<12}  {:<12}  {:<12}  {:<12}  FHE latency",
+        "features", "plain_raw", "plain_proba", "fhe_raw", "fhe_proba"
     );
     println!("  {}", "-".repeat(88));
 

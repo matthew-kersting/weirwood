@@ -95,13 +95,12 @@ impl InferenceService for WeirwoodInference {
         // truly in parallel.
         let encrypted_score = tokio::task::spawn_blocking(move || {
             let mut guard = sessions.blocking_lock();
-            let evaluator = guard
-                .get_mut(&session_id)
-                .ok_or_else(|| Status::not_found(format!("session {session_id} not found")))?;
-            Ok::<_, Status>(evaluator.predict(&model, &features))
+            let evaluator = guard.get_mut(&session_id).ok_or(())?;
+            Ok::<_, ()>(evaluator.predict(&model, &features))
         })
         .await
-        .map_err(|e| Status::internal(format!("predict task panicked: {e}")))??;
+        .map_err(|e| Status::internal(format!("predict task panicked: {e}")))?
+        .map_err(|()| Status::not_found(format!("session {} not found", req.session_id)))?;
 
         let score_bytes = serialize_score(&encrypted_score)
             .map_err(|e| Status::internal(format!("failed to serialize score: {e}")))?;

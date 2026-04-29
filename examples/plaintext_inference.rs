@@ -44,7 +44,7 @@ fn main() -> Result<(), weirwood::Error> {
         let test_vectors: &[&[f32]] = &[&[0.0, 0.0], &[0.5, 0.5], &[1.0, 1.0], &[0.7, 0.3]];
         for feature_vector in test_vectors {
             let predicted_score: f32 =
-                PlaintextEvaluator.predict_proba(&weirwood_tree, &feature_vector.to_vec());
+                PlaintextEvaluator.predict_proba(&weirwood_tree, feature_vector);
             println!("  {feature_vector:?}  ->  {predicted_score:.6}");
         }
     }
