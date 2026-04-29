@@ -55,7 +55,7 @@ impl InferenceService for InferenceServer {
         self.sessions.lock().unwrap().insert(id, evaluator);
 
         println!(
-            "[init] session {id} ({} MB server key)",
+            "[init] session ({} MB server key)",
             req.server_key.len() / 1_000_000
         );
         Ok(Response::new(InitSessionResponse {

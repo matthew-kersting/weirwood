@@ -12,6 +12,20 @@ XGBoost builds an ensemble of regression trees. At inference time, each tree rou
 
 Under FHE, the client encrypts its feature vector before sending it to the server. The server evaluates the full ensemble on ciphertext using TFHE's programmable bootstrapping — each split comparison is computed as an exact lookup table evaluation, no approximation required. The encrypted result is sent back and decrypted by the client. The server learns nothing.
 
+I recommend starting with the project by running the demos! Everything to run to cokpletely independent projects that use weirwood are in ./demo/fhe_local and ./demo/fhe_grpc. To run the local inference demo just use
+```sh
+cd demo/fhe_local
+cargo run --release
+```
+and to run a full demo with a client and server that communicate over gRPC
+```sh
+cd demo/fhe_grpc
+# Terminal 1
+cargo run --release --bin server
+# Terminal 2 (after the server prints "Listening…")
+cargo run --release --bin client
+```
+
 ## Usage
 
 Add to your `Cargo.toml`:
