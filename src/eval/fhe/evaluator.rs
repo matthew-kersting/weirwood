@@ -9,6 +9,7 @@ use tfhe::FheInt32;
 use tfhe::ServerKey;
 use tfhe::prelude::*;
 
+use crate::Error;
 use crate::eval::Evaluator;
 use crate::model::WeirwoodTree;
 
@@ -69,12 +70,39 @@ pub struct FheEvaluator {
 }
 
 impl FheEvaluator {
-    /// Create a new evaluator from a [`ServerContext`].
+    /// Create a new evaluator from a [`ServerContext`], validating the model
+    /// for FHE evaluation first.
+    ///
+    /// Returns `Err(Error::Format)` if `model.validate_for_fhe()` reports any
+    /// warnings (e.g. a split threshold that overflows the fixed-point range
+    /// — FHE evaluation at such a node would produce wrong results). Use
+    /// [`new`](Self::new) directly to skip validation.
+    pub fn try_new(model: &WeirwoodTree, ctx: ServerContext) -> Result<Self, Error> {
+        let warnings = model.validate_for_fhe();
+        if !warnings.is_empty() {
+            let summary = warnings
+                .iter()
+                .map(|w| w.to_string())
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(Error::Format(format!(
+                "model is unsafe for FHE evaluation ({} issue(s)): {summary}",
+                warnings.len()
+            )));
+        }
+        Ok(Self::new(ctx))
+    }
+
+    /// Create a new evaluator from a [`ServerContext`] **without** running
+    /// FHE-safety validation on a model.
     ///
     /// Builds a dedicated Rayon thread pool and installs the server key on
-    /// every worker thread.  The one-time key broadcast happens here so that
+    /// every worker thread. The one-time key broadcast happens here so that
     /// [`predict`](Self::predict) calls pay no per-call broadcast overhead on
-    /// pool workers.  The calling thread is handled lazily inside `predict`.
+    /// pool workers. The calling thread is handled lazily inside `predict`.
+    ///
+    /// Prefer [`try_new`](Self::try_new) when you have a model in hand;
+    /// `new` exists for advanced callers who validate separately.
     pub fn new(ctx: ServerContext) -> Self {
         let id = EVALUATOR_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
         let server_key = Arc::new(ctx.server_key);
@@ -141,11 +169,9 @@ impl Evaluator for FheEvaluator {
     /// `base_score` (accumulation is cheap: only homomorphic additions, no PBS).
     ///
     /// The server key is installed automatically on the calling thread the
-    /// first time `predict` runs there (and on every worker thread at
-    /// evaluator construction).  Callers no longer need to call
-    /// [`ServerContext::set_active`] explicitly; the method remains for
-    /// advanced users who want to install a key without going through an
-    /// evaluator.
+    /// first time `predict` runs there, and on every worker thread at
+    /// evaluator construction. Callers don't need to manage TFHE thread-local
+    /// state themselves.
     fn predict(
         &self,
         weirwood_tree: &WeirwoodTree,

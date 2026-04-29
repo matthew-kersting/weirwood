@@ -37,14 +37,14 @@ fn main() -> Result<(), weirwood::Error> {
             .map(|feature_str| feature_str.parse::<f32>().expect("feature must be a float"))
             .collect();
 
-        let predicted_score: f32 = PlaintextEvaluator.predict_proba(&weirwood_tree, &features);
+        let predicted_score: f32 = PlaintextEvaluator.predict_proba(&weirwood_tree, &features)?;
         println!("predict_proba({features:?}) = {predicted_score:.6}");
     } else {
         println!("No features supplied — running built-in test vectors:\n");
         let test_vectors: &[&[f32]] = &[&[0.0, 0.0], &[0.5, 0.5], &[1.0, 1.0], &[0.7, 0.3]];
         for feature_vector in test_vectors {
             let predicted_score: f32 =
-                PlaintextEvaluator.predict_proba(&weirwood_tree, feature_vector);
+                PlaintextEvaluator.predict_proba(&weirwood_tree, feature_vector)?;
             println!("  {feature_vector:?}  ->  {predicted_score:.6}");
         }
     }

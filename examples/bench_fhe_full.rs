@@ -92,9 +92,9 @@ fn main() -> Result<(), weirwood::Error> {
     // -----------------------------------------------------------------------
     // Server setup
     // -----------------------------------------------------------------------
-    // FheEvaluator::new installs the server key on its worker threads;
-    // predict() lazily installs it on the calling thread on first use.
-    let fhe_eval = FheEvaluator::new(server_ctx);
+    // try_new validates the model for FHE evaluation and installs the server
+    // key on worker threads. predict() lazily installs it on the calling thread.
+    let fhe_eval = FheEvaluator::try_new(&model, server_ctx)?;
 
     // -----------------------------------------------------------------------
     // Client: encryption latency

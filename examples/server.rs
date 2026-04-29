@@ -3,16 +3,22 @@
 //! Implements the generated [`InferenceService`] trait, registers a single
 //! pre-loaded model, and serves it under `tonic::transport::Server`.
 //! Production deployments will want to layer their own TLS, interceptors,
-//! tracing, and rate limits on top — this binary stays intentionally short
-//! so the protocol itself is easy to read.
+//! tracing, rate limits, and authentication on top — this binary stays
+//! intentionally short so the protocol itself is easy to read.
+//!
+//! Each session pins ~100–200 MB of `ServerKey` in memory, so the example
+//! runs a periodic sweep that evicts sessions idle for more than
+//! `SESSION_IDLE_TIMEOUT_SECS` seconds. Override with `--idle-timeout-secs`.
 //!
 //! Usage:
 //!   cargo run --release --example server --features transport -- \
-//!     --model tests/fixtures/trained_binary.ubj [--port 9999]
+//!     --model tests/fixtures/trained_binary.ubj [--port 9999] \
+//!     [--idle-timeout-secs 600]
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use tokio::sync::Mutex;
 use tonic::transport::Server;
@@ -30,7 +36,19 @@ use weirwood::{
     },
 };
 
-type SessionMap = Arc<Mutex<HashMap<String, FheEvaluator>>>;
+/// Default idle window before a session is evicted. Each session pins a
+/// ~100–200 MB `ServerKey`, so an unbounded map will OOM a long-running server.
+const SESSION_IDLE_TIMEOUT_SECS: u64 = 600;
+
+/// How often the eviction sweep runs.
+const SESSION_SWEEP_INTERVAL: Duration = Duration::from_secs(60);
+
+struct Session {
+    evaluator: FheEvaluator,
+    last_used: Instant,
+}
+
+type SessionMap = Arc<Mutex<HashMap<String, Session>>>;
 
 struct WeirwoodInference {
     model: Arc<WeirwoodTree>,
@@ -50,17 +68,23 @@ impl InferenceService for WeirwoodInference {
         })?;
 
         // FheEvaluator construction installs the key on its worker threads;
-        // it does not block on FHE work, but key cloning is a few hundred ms,
-        // so we run it in `spawn_blocking` to avoid stalling the runtime.
-        let evaluator = tokio::task::spawn_blocking(move || FheEvaluator::new(server_ctx))
-            .await
-            .map_err(|e| Status::internal(format!("evaluator construction panicked: {e}")))?;
+        // it doesn't run FHE work but it does clone a ~100 MB key, so push it
+        // off the runtime to avoid stalling the reactor.
+        let model = Arc::clone(&self.model);
+        let evaluator =
+            tokio::task::spawn_blocking(move || FheEvaluator::try_new(&model, server_ctx))
+                .await
+                .map_err(|e| Status::internal(format!("evaluator construction panicked: {e}")))?
+                .map_err(|e| Status::failed_precondition(format!("model rejected for FHE: {e}")))?;
 
         let session_id = Uuid::new_v4().to_string();
-        self.sessions
-            .lock()
-            .await
-            .insert(session_id.clone(), evaluator);
+        self.sessions.lock().await.insert(
+            session_id.clone(),
+            Session {
+                evaluator,
+                last_used: Instant::now(),
+            },
+        );
 
         println!(
             "[init] Session created (server key {} MB)",
@@ -89,14 +113,14 @@ impl InferenceService for WeirwoodInference {
         let session_id = req.session_id.clone();
 
         // Move the multi-second FHE evaluation onto a blocking thread so the
-        // tonic runtime stays responsive. We hold the session lock only long
-        // enough to look up the evaluator, then release it before doing the
-        // actual work — concurrent predicts on different sessions can run
-        // truly in parallel.
+        // tonic runtime stays responsive. The session lock is held only long
+        // enough to look up the evaluator and bump `last_used`; concurrent
+        // predicts on different sessions can run truly in parallel.
         let encrypted_score = tokio::task::spawn_blocking(move || {
             let mut guard = sessions.blocking_lock();
-            let evaluator = guard.get_mut(&session_id).ok_or(())?;
-            Ok::<_, ()>(evaluator.predict(&model, &features))
+            let session = guard.get_mut(&session_id).ok_or(())?;
+            session.last_used = Instant::now();
+            Ok::<_, ()>(session.evaluator.predict(&model, &features))
         })
         .await
         .map_err(|e| Status::internal(format!("predict task panicked: {e}")))?
@@ -107,9 +131,28 @@ impl InferenceService for WeirwoodInference {
 
         println!("[predict] Session completed");
 
+        // The proto carries `repeated bytes encrypted_scores` to leave room for
+        // future multi:softmax support without a wire break. Binary and
+        // regression objectives always emit a single-element vector.
         Ok(Response::new(PredictResponse {
-            encrypted_score: score_bytes,
+            encrypted_scores: vec![score_bytes],
         }))
+    }
+}
+
+/// Periodically drop sessions whose `last_used` is older than `idle_timeout`.
+async fn run_session_sweeper(sessions: SessionMap, idle_timeout: Duration) {
+    let mut ticker = tokio::time::interval(SESSION_SWEEP_INTERVAL);
+    loop {
+        ticker.tick().await;
+        let now = Instant::now();
+        let mut guard = sessions.lock().await;
+        let before = guard.len();
+        guard.retain(|_, s| now.duration_since(s.last_used) < idle_timeout);
+        let evicted = before - guard.len();
+        if evicted > 0 {
+            println!("[sweep] Evicted {evicted} idle session(s)");
+        }
     }
 }
 
@@ -118,6 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mut model_path = "tests/fixtures/trained_binary.ubj".to_string();
     let mut port: u16 = 9999;
+    let mut idle_timeout = Duration::from_secs(SESSION_IDLE_TIMEOUT_SECS);
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -128,6 +172,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .expect("--port requires a number")
                     .parse()
                     .expect("invalid port")
+            }
+            "--idle-timeout-secs" => {
+                let secs: u64 = args
+                    .next()
+                    .expect("--idle-timeout-secs requires a number")
+                    .parse()
+                    .expect("invalid idle timeout");
+                idle_timeout = Duration::from_secs(secs);
             }
             other => eprintln!("unknown argument: {other}"),
         }
@@ -152,13 +204,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         model.num_features
     );
 
+    let sessions: SessionMap = Arc::new(Mutex::new(HashMap::new()));
+    tokio::spawn(run_session_sweeper(Arc::clone(&sessions), idle_timeout));
+
     let svc = WeirwoodInference {
         model: Arc::new(model),
-        sessions: Arc::new(Mutex::new(HashMap::new())),
+        sessions,
     };
 
     let addr: SocketAddr = format!("127.0.0.1:{port}").parse()?;
-    println!("Inference server listening on {addr}");
+    println!(
+        "Inference server listening on {addr} (session idle timeout {} s)",
+        idle_timeout.as_secs()
+    );
 
     Server::builder()
         .add_service(

@@ -45,8 +45,9 @@ message PredictRequest {
 }
 
 message PredictResponse {
-  // safe_serialize'd FheInt32 holding the raw pre-activation ensemble score.
-  // The client decrypts and applies the activation (sigmoid / softmax /
-  // identity) corresponding to its model's objective.
-  bytes encrypted_score = 1;
+  // One safe_serialize'd FheInt32 per output. For binary:logistic and
+  // reg:squarederror this carries a single element (the raw pre-activation
+  // ensemble score). The shape leaves room for future multi:softmax support
+  // without breaking the wire format.
+  repeated bytes encrypted_scores = 1;
 }

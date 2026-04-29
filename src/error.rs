@@ -14,6 +14,11 @@ pub enum Error {
     #[error("FHE error: {0}")]
     Fhe(String),
 
+    /// Network/RPC failure, framing error, or any other transport-layer issue
+    /// surfaced by the optional `transport` feature.
+    #[error("transport error: {0}")]
+    Transport(String),
+
     #[error("{0}")]
     Other(String),
 }

@@ -41,7 +41,7 @@ pub use rpc::inference_service_client::InferenceServiceClient;
 
 pub use rpc::{InitSessionRequest, InitSessionResponse, PredictRequest, PredictResponse};
 
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 
 use tfhe::named::Named;
 use tfhe::safe_serialization::{safe_deserialize, safe_serialize};
@@ -107,53 +107,4 @@ pub fn serialize_score(score: &EncryptedScore) -> Result<Vec<u8>, Error> {
 /// Deserialize an encrypted score.
 pub fn deserialize_score(bytes: &[u8]) -> Result<EncryptedScore, Error> {
     safe_from_bytes(bytes, "encrypted score")
-}
-
-/// Serialize an encrypted input (feature vector) to bytes.
-///
-/// Each feature is serialized individually and concatenated, with a 4-byte
-/// length prefix indicating the number of features. This avoids relying on
-/// `Named` for `Vec<FheInt32>`, which is not implemented by tfhe-rs.
-pub fn serialize_encrypted_input(input: &[tfhe::FheInt32]) -> Result<Vec<u8>, Error> {
-    let mut buf = Vec::new();
-    let num_features = input.len() as u32;
-    buf.extend_from_slice(&num_features.to_le_bytes());
-    for feature in input {
-        let feature_bytes = serialize_feature(feature)?;
-        buf.extend_from_slice(&(feature_bytes.len() as u32).to_le_bytes());
-        buf.extend_from_slice(&feature_bytes);
-    }
-    Ok(buf)
-}
-
-/// Deserialize an encrypted input (feature vector) from bytes.
-///
-/// Expects the format produced by `serialize_encrypted_input`.
-pub fn deserialize_encrypted_input(bytes: &[u8]) -> Result<Vec<tfhe::FheInt32>, Error> {
-    let mut reader = Cursor::new(bytes);
-
-    let mut num_features_bytes = [0u8; 4];
-    reader
-        .read_exact(&mut num_features_bytes)
-        .map_err(|e| Error::Other(format!("failed to read feature count: {}", e)))?;
-    let num_features = u32::from_le_bytes(num_features_bytes) as usize;
-
-    let mut features = Vec::with_capacity(num_features);
-    for _ in 0..num_features {
-        let mut len_bytes = [0u8; 4];
-        reader
-            .read_exact(&mut len_bytes)
-            .map_err(|e| Error::Other(format!("failed to read feature length: {}", e)))?;
-        let len = u32::from_le_bytes(len_bytes) as usize;
-
-        let mut feature_bytes = vec![0u8; len];
-        reader
-            .read_exact(&mut feature_bytes)
-            .map_err(|e| Error::Other(format!("failed to read feature bytes: {}", e)))?;
-
-        let feature = deserialize_feature(&feature_bytes)?;
-        features.push(feature);
-    }
-
-    Ok(features)
 }

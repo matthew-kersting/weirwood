@@ -26,12 +26,12 @@ fn main() -> Result<(), weirwood::Error> {
 
     // Warm up instruction / branch-predictor caches.
     for _ in 0..WARMUP {
-        evaluator.predict_proba(&weirwood_tree, &features);
+        let _ = evaluator.predict_proba(&weirwood_tree, &features)?;
     }
 
     let start: Instant = Instant::now();
     for _ in 0..ITERATIONS {
-        evaluator.predict_proba(&weirwood_tree, &features);
+        let _ = evaluator.predict_proba(&weirwood_tree, &features)?;
     }
     let elapsed = start.elapsed();
 

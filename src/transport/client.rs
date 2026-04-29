@@ -55,11 +55,11 @@ impl WeirwoodClient {
     /// reuse the same session.
     pub async fn connect(dst: impl Into<String>) -> Result<Self, Error> {
         let endpoint = tonic::transport::Endpoint::from_shared(dst.into())
-            .map_err(|e| Error::Other(format!("invalid server endpoint: {e}")))?;
+            .map_err(|e| Error::Transport(format!("invalid server endpoint: {e}")))?;
         let channel = endpoint
             .connect()
             .await
-            .map_err(|e| Error::Other(format!("failed to connect to inference server: {e}")))?;
+            .map_err(|e| Error::Transport(format!("failed to connect to inference server: {e}")))?;
 
         let mut grpc = InferenceServiceClient::new(channel)
             .max_decoding_message_size(MAX_GRPC_MESSAGE_BYTES)
@@ -89,26 +89,32 @@ impl WeirwoodClient {
     ///
     /// `multi:softmax` is not supported here because the FHE evaluator
     /// currently returns a single ensemble sum, not per-class scores; calling
-    /// this on a multi-class model panics. Use [`predict_raw`](Self::predict_raw)
-    /// if you need to apply your own activation.
+    /// this on a multi-class model returns `Err(Error::Format)`. Use
+    /// [`predict_raw`](Self::predict_raw) if you need to apply your own
+    /// activation.
     pub async fn predict_proba(
         &mut self,
         model: &WeirwoodTree,
         features: &[f32],
     ) -> Result<f32, Error> {
         let raw = self.predict_raw(features).await?;
-        Ok(match &model.objective {
-            Objective::BinaryLogistic => sigmoid(raw),
-            Objective::RegSquaredError | Objective::Other(_) => raw,
-            Objective::MultiSoftmax { num_class } => panic!(
-                "WeirwoodClient::predict_proba does not support multi:softmax (num_class={num_class}); \
-                 the FHE evaluator returns a single ensemble sum, not per-class scores"
-            ),
-        })
+        match &model.objective {
+            Objective::BinaryLogistic => Ok(sigmoid(raw)),
+            Objective::RegSquaredError | Objective::Other(_) => Ok(raw),
+            Objective::MultiSoftmax { num_class } => Err(Error::Format(format!(
+                "WeirwoodClient::predict_proba does not support multi:softmax \
+                 (num_class={num_class}); the FHE evaluator returns a single \
+                 ensemble sum, not per-class scores"
+            ))),
+        }
     }
 
     /// Run inference and return the raw (pre-activation) decrypted score.
     /// Useful when the caller wants to apply its own activation.
+    ///
+    /// For multi-class models the server will eventually return one element
+    /// per class; until then this method takes the first element of the
+    /// response and errors if the response is empty.
     pub async fn predict_raw(&mut self, features: &[f32]) -> Result<f32, Error> {
         let encrypted = self.fhe.encrypt(features);
         let mut feature_bytes = Vec::with_capacity(encrypted.len());
@@ -127,7 +133,10 @@ impl WeirwoodClient {
             .map_err(status_to_error)?
             .into_inner();
 
-        let encrypted_score = deserialize_score(&resp.encrypted_score)?;
+        let first = resp.encrypted_scores.first().ok_or_else(|| {
+            Error::Transport("server returned empty encrypted_scores".to_string())
+        })?;
+        let encrypted_score = deserialize_score(first)?;
         Ok(self.fhe.decrypt_score(&encrypted_score))
     }
 
@@ -138,5 +147,5 @@ impl WeirwoodClient {
 }
 
 fn status_to_error(status: Status) -> Error {
-    Error::Other(format!("gRPC error: {status}"))
+    Error::Transport(format!("gRPC error: {status}"))
 }

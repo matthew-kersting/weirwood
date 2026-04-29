@@ -4,7 +4,7 @@ Privacy-preserving XGBoost inference via Fully Homomorphic Encryption, written i
 
 Load a trained XGBoost model, encrypt a feature vector on the client, and evaluate the entire boosted tree ensemble on ciphertext. The server computes the prediction without ever seeing the input data.
 
-**Status:** Model loading, plaintext inference, and FHE inference are all working. The FHE evaluator supports multi-tree ensembles of arbitrary depth with Rayon tree-level parallelism, validated on a 100-tree `binary:logistic` model with 525 internal nodes (~64 s per inference on CPU, avg 10 runs). Results match plaintext within fixed-point rounding error (`N × 0.5/SCALE` accumulated over N trees; ±0.05 worst-case for 100 trees with `SCALE=1000`, observed ≈ 0.0166 on the benchmark fixture). Sigmoid and softmax activations are applied client-side on the decrypted raw score.
+**Status:** Model loading, plaintext inference, and FHE inference are all working. The FHE evaluator supports multi-tree ensembles of arbitrary depth with Rayon tree-level parallelism, validated on a 100-tree `binary:logistic` model with 525 internal nodes (~3.9 min per inference on CPU, avg 10 runs — see the benchmark table below for the latest measurement). Results match plaintext within fixed-point rounding error (`N × 0.5/SCALE` accumulated over N trees; ±0.05 worst-case for 100 trees with `SCALE=1000`, observed ≈ 0.0166 on the benchmark fixture). Sigmoid and softmax activations are applied client-side on the decrypted raw score.
 
 ## How it works
 
@@ -34,14 +34,15 @@ if you want the raw pre-activation score instead.
 use weirwood::{model::WeirwoodTree, eval::PlaintextEvaluator};
 
 fn main() -> Result<(), weirwood::Error> {
-    // Load from JSON (text) or UBJ (binary) — both produce the same WeirwoodTree.
-    let weirwood_tree = WeirwoodTree::from_json_file("model.json")?;
-    // or: let weirwood_tree = WeirwoodTree::from_ubj_file("model.ubj")?;
+    // `from_file` dispatches on extension: `.ubj` → Universal Binary JSON,
+    // anything else → JSON. Use the explicit `from_json_file` /
+    // `from_ubj_file` constructors if you prefer to be explicit.
+    let weirwood_tree = WeirwoodTree::from_file("model.ubj")?;
 
-    let features = vec![1.0_f32, 0.5, 3.2, 0.1];
+    let features = [1.0_f32, 0.5, 3.2, 0.1];
 
     // Returns probability for binary:logistic, raw score for regression.
-    let score = PlaintextEvaluator.predict_proba(&weirwood_tree, &features);
+    let score = PlaintextEvaluator.predict_proba(&weirwood_tree, &features)?;
     println!("prediction: {score:.4}");
 
     Ok(())
@@ -55,6 +56,10 @@ use weirwood::{model::WeirwoodTree, eval::{Evaluator, PlaintextEvaluator}};
 
 let raw_score = PlaintextEvaluator.predict(&weirwood_tree, &features);
 ```
+
+For multi-class (`multi:softmax`) models, use
+`PlaintextEvaluator::predict_multiclass_proba(&weirwood_tree, &features)` which
+returns one probability per class.
 
 Save the model from Python with:
 
@@ -82,15 +87,17 @@ use weirwood::{
 let client = ClientContext::generate()?;        // generate keypair (~1–3 s)
 let server_ctx = client.server_context();       // extract server key only
 
-let model = WeirwoodTree::from_json_file("model.json")?;
-let features = vec![1.0_f32, 0.5, 3.2, 0.1];
+let model = WeirwoodTree::from_file("model.ubj")?;
+let features = [1.0_f32, 0.5, 3.2, 0.1];
 let ciphertext = client.encrypt(&features);
 
 // --- "Send server_ctx and ciphertext to the inference server" ---
 
 // --- Server ---
-// FheEvaluator::new installs the server key on its Rayon worker threads.
-let evaluator = FheEvaluator::new(server_ctx);
+// try_new validates the model for FHE evaluation (rejects e.g. thresholds
+// that overflow the fixed-point range) and installs the server key on
+// worker threads. predict() lazily installs it on the calling thread.
+let evaluator = FheEvaluator::try_new(&model, server_ctx)?;
 let encrypted_score = evaluator.predict(&model, &ciphertext);
 
 // --- "Send encrypted_score back to the client" ---
@@ -103,6 +110,12 @@ println!("prediction: {raw_score:.4}"); // for regression (identity activation)
 // for binary:logistic: let proba = 1.0 / (1.0 + (-raw_score).exp());
 ```
 
+`FheEvaluator::try_new(&model, ctx)` runs `model.validate_for_fhe()`
+internally and refuses to build an evaluator for any model that would produce
+incorrect FHE results (e.g. thresholds outside the fixed-point range). Use the
+unchecked `FheEvaluator::new(ctx)` constructor only when you've validated
+elsewhere.
+
 In a single-process deployment (as in the examples) both parties run in the same process — the `server_ctx` is passed locally instead of over a network.
 
 ### Networked deployment (gRPC)
@@ -114,7 +127,7 @@ use weirwood::{model::WeirwoodTree, transport::WeirwoodClient};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let model = WeirwoodTree::from_ubj_file("model.ubj")?;
+    let model = WeirwoodTree::from_file("model.ubj")?;
     let mut client = WeirwoodClient::connect("http://127.0.0.1:9999").await?;
     let proba = client.predict_proba(&model, &[1.0, 0.5, 3.2, 0.1]).await?;
     println!("prediction: {proba:.4}");
@@ -130,15 +143,22 @@ The protocol-level types (`InferenceServiceClient`, `InitSessionRequest`/`Respon
 src/
   lib.rs            public API and re-exports
   error.rs          Error enum
-  model.rs          XGBoost IR types (WeirwoodTree, Tree, Node) + JSON/UBJ loader
+  model.rs          XGBoost IR (WeirwoodTree, Tree, Node), JSON/UBJ loader, LoadWarning
   ubj.rs            Universal Binary JSON parser
   eval/
-    mod.rs          Evaluator trait + PlaintextEvaluator
+    mod.rs          Evaluator trait + PlaintextEvaluator (sigmoid, softmax, multiclass)
     fhe/
       mod.rs        re-exports + unit tests
-      client.rs     ClientContext — key generation, encrypt, decrypt; EncryptedInput; SCALE
-      server.rs     ServerContext — server key only (set_active for advanced use)
+      client.rs     ClientContext — key generation, encrypt, decrypt; SCALE; encode_fixed_point
+      server.rs     ServerContext — wraps the public ServerKey only
       evaluator.rs  FheEvaluator — encrypted tree evaluation
+  transport/        (gated on `transport` feature)
+    mod.rs          serialize/deserialize helpers + public re-exports
+    rpc.rs          tonic-build generated InferenceService
+    client.rs       WeirwoodClient — high-level async convenience client
+
+proto/
+  inference.proto           gRPC service definition compiled by `tonic-build`
 
 examples/
   plaintext_inference.rs    end-to-end plaintext demo
@@ -147,6 +167,9 @@ examples/
   bench_plaintext.rs        plaintext throughput benchmark
   bench_fhe_stump.rs        FHE latency benchmark (stump)
   bench_fhe_full.rs         FHE latency benchmark (100-tree ensemble, 525 PBS ops)
+  server.rs                 minimal tonic InferenceService server     (transport feature)
+  client.rs                 WeirwoodClient end-to-end demo            (transport feature)
+  measure_transport_sizes.rs   reports on-the-wire ServerKey / ciphertext byte sizes
 
 tests/
   integration.rs            end-to-end plaintext + FHE correctness tests
@@ -173,7 +196,7 @@ benchmarks/
 |-----------|-----------|-----|
 | `reg:squarederror` | Yes | Yes |
 | `binary:logistic` | Yes | Yes (sigmoid applied client-side post-decrypt) |
-| `multi:softmax` | Partial | Planned |
+| `multi:softmax` / `multi:softprob` | Yes (`predict_multiclass_proba`) | Planned |
 
 ## Features
 

@@ -101,9 +101,10 @@ fn main() -> Result<(), weirwood::Error> {
     // -----------------------------------------------------------------------
     // Server setup
     // -----------------------------------------------------------------------
-    // FheEvaluator::new installs the server key on its worker threads;
-    // predict() lazily installs it on the calling thread on first use.
-    let evaluator = FheEvaluator::new(server_ctx);
+    // try_new validates the model for FHE evaluation (rejects e.g. thresholds
+    // that overflow the fixed-point range) and installs the server key on
+    // worker threads. predict() lazily installs it on the calling thread.
+    let evaluator = FheEvaluator::try_new(&model, server_ctx)?;
 
     // -----------------------------------------------------------------------
     // Build test cases: CLI features (if any) + default probe vectors.

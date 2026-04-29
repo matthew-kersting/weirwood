@@ -59,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", "-".repeat(78));
 
     for (name, features) in test_cases {
-        let plaintext = PlaintextEvaluator.predict_proba(&model, &features);
+        let plaintext = PlaintextEvaluator.predict_proba(&model, &features)?;
         let fhe = client.predict_proba(&model, &features).await?;
         let delta = (fhe - plaintext).abs();
         println!("{name:<35} {plaintext:<15.6} {fhe:<15.6} {delta:<10.6}");
