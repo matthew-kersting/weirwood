@@ -58,6 +58,21 @@ impl Tree {
             };
         }
     }
+
+    /// Depth of this tree, where a stump (root + 2 leaves) is depth 1.
+    pub fn depth(&self) -> usize {
+        fn walk(tree: &Tree, node_idx: usize, depth: usize) -> usize {
+            let node = &tree.nodes[node_idx];
+            if node.is_leaf() {
+                depth
+            } else {
+                let left = walk(tree, node.left_child as usize, depth + 1);
+                let right = walk(tree, node.right_child as usize, depth + 1);
+                left.max(right)
+            }
+        }
+        walk(self, 0, 0)
+    }
 }
 
 /// The prediction task the model was trained for.
@@ -94,9 +109,21 @@ pub struct WeirwoodTree {
 }
 
 impl WeirwoodTree {
-    /// Load from an XGBoost JSON model file.
+    /// Load an XGBoost model from a path, dispatching by extension:
+    /// `.ubj` → Universal Binary JSON, anything else → JSON.
     ///
-    /// Save from Python with `booster.save_model("model.json")`.
+    /// Save from Python with either `booster.save_model("model.json")` or
+    /// `booster.save_model("model.ubj")`.
+    pub fn from_file(path: impl AsRef<Path>) -> Result<Self, Error> {
+        let path = path.as_ref();
+        if path.extension().is_some_and(|e| e == "ubj") {
+            Self::from_ubj_file(path)
+        } else {
+            Self::from_json_file(path)
+        }
+    }
+
+    /// Load from an XGBoost JSON model file.
     pub fn from_json_file(path: impl AsRef<Path>) -> Result<Self, Error> {
         let bytes: Vec<u8> = std::fs::read(path)?;
         Self::from_json_bytes(&bytes)
@@ -109,8 +136,6 @@ impl WeirwoodTree {
     }
 
     /// Load from an XGBoost UBJ (Universal Binary JSON) model file.
-    ///
-    /// Save from Python with `booster.save_model("model.ubj")`.
     pub fn from_ubj_file(path: impl AsRef<Path>) -> Result<Self, Error> {
         let bytes: Vec<u8> = std::fs::read(path)?;
         Self::from_ubj_bytes(&bytes)
@@ -121,6 +146,11 @@ impl WeirwoodTree {
         let json_value: serde_json::Value = crate::ubj::parse(bytes)?;
         let raw_model: RawModel = serde_json::from_value(json_value)?;
         Self::from_raw(raw_model)
+    }
+
+    /// Maximum [`Tree::depth`] across the ensemble; 0 if there are no trees.
+    pub fn max_depth(&self) -> usize {
+        self.trees.iter().map(Tree::depth).max().unwrap_or(0)
     }
 
     /// Inspect the loaded tree for issues that would only manifest under FHE
@@ -191,35 +221,11 @@ impl WeirwoodTree {
     }
 }
 
-/// Parse the `base_score` field.
-///
-/// XGBoost >= 1.6 stores `base_score` in **probability space** wrapped in
-/// brackets, e.g. `"[5E-1]"`.  The raw-score contribution for inference is
-/// `logit(p) = ln(p / (1 - p))`.  For the default `p = 0.5` this is exactly
-/// zero, meaning the bias has already been absorbed into the tree leaf weights.
-///
-/// Older versions store a plain float string (e.g. `"0.5"`) that is already
-/// in raw-score (logit) space and is added directly.
-fn parse_base_score(raw_base_score: &str) -> Result<f32, Error> {
-    let trimmed_score: &str = raw_base_score.trim();
-    if trimmed_score.starts_with('[') && trimmed_score.ends_with(']') {
-        let base_probability: f32 = trimmed_score[1..trimmed_score.len() - 1]
-            .parse::<f32>()
-            .map_err(|_| Error::Format(format!("invalid base_score: {raw_base_score:?}")))?;
-        // Convert from probability space to logit (raw-score) space.
-        Ok((base_probability / (1.0 - base_probability)).ln())
-    } else {
-        trimmed_score
-            .parse::<f32>()
-            .map_err(|_| Error::Format(format!("invalid base_score: {raw_base_score:?}")))
-    }
-}
-
 /// A non-fatal issue discovered while loading a [`WeirwoodTree`].
 ///
-/// Returned by [`WeirwoodTree::validate_for_fhe`] so that applications can
-/// decide how to react (warn, log, abort) instead of the library writing to
-/// stderr behind their backs.
+/// Returned by [`WeirwoodTree::validate_for_fhe`] so applications can decide
+/// how to react (warn, log, abort) instead of the library writing to stderr
+/// behind their backs.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LoadWarning {
     /// An internal node's threshold, after scaling by the FHE fixed-point
@@ -251,6 +257,30 @@ impl std::fmt::Display for LoadWarning {
     }
 }
 
+/// Parse the `base_score` field.
+///
+/// XGBoost >= 1.6 stores `base_score` in **probability space** wrapped in
+/// brackets, e.g. `"[5E-1]"`.  The raw-score contribution for inference is
+/// `logit(p) = ln(p / (1 - p))`.  For the default `p = 0.5` this is exactly
+/// zero, meaning the bias has already been absorbed into the tree leaf weights.
+///
+/// Older versions store a plain float string (e.g. `"0.5"`) that is already
+/// in raw-score (logit) space and is added directly.
+fn parse_base_score(raw_base_score: &str) -> Result<f32, Error> {
+    let trimmed_score: &str = raw_base_score.trim();
+    if trimmed_score.starts_with('[') && trimmed_score.ends_with(']') {
+        let base_probability: f32 = trimmed_score[1..trimmed_score.len() - 1]
+            .parse::<f32>()
+            .map_err(|_| Error::Format(format!("invalid base_score: {raw_base_score:?}")))?;
+        // Convert from probability space to logit (raw-score) space.
+        Ok((base_probability / (1.0 - base_probability)).ln())
+    } else {
+        trimmed_score
+            .parse::<f32>()
+            .map_err(|_| Error::Format(format!("invalid base_score: {raw_base_score:?}")))
+    }
+}
+
 fn tree_from_raw(raw_tree: RawTree, num_features: usize) -> Result<Tree, Error> {
     let node_count: usize = raw_tree.left_children.len();
     if raw_tree.right_children.len() != node_count
@@ -273,21 +303,16 @@ fn tree_from_raw(raw_tree: RawTree, num_features: usize) -> Result<Tree, Error> 
         })
         .collect();
 
-    // Validate structural integrity and FHE compatibility of each node.
     for (i, node) in nodes.iter().enumerate() {
         if node.is_leaf() {
             continue;
         }
-
-        // Ensure the split feature index is within bounds.
         if node.split_feature as usize >= num_features {
             return Err(Error::Format(format!(
                 "node {i}: split_feature {} >= num_features {num_features}",
                 node.split_feature
             )));
         }
-
-        // Ensure child indices are valid node indices.
         if node.left_child < 0 || node.left_child as usize >= node_count {
             return Err(Error::Format(format!(
                 "node {i}: left_child {} is out of bounds (node_count={node_count})",
@@ -300,10 +325,6 @@ fn tree_from_raw(raw_tree: RawTree, num_features: usize) -> Result<Tree, Error> 
                 node.right_child
             )));
         }
-
-        // FHE-specific threshold-range checks are deferred to
-        // WeirwoodTree::validate_for_fhe so this loader doesn't print to
-        // stderr or block plaintext-only consumers of overflowing models.
     }
 
     Ok(Tree { nodes })

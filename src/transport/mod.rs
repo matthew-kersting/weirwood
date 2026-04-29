@@ -43,62 +43,70 @@ pub use rpc::{InitSessionRequest, InitSessionResponse, PredictRequest, PredictRe
 
 use std::io::{Cursor, Read};
 
+use tfhe::named::Named;
 use tfhe::safe_serialization::{safe_deserialize, safe_serialize};
+use tfhe::{Unversionize, Versionize};
 
 use crate::Error;
 use crate::eval::fhe::{EncryptedScore, ServerContext};
 
+/// Maximum payload size accepted by [`safe_serialize`] / [`safe_deserialize`].
+/// 512 MB is generous headroom over the ~180 MB serialized `ServerKey`.
 const SIZE_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 
-/// Serialize a `ServerKey` from a `ServerContext` to bytes using TFHE's safe serialization.
-///
-/// The resulting bytes (~100–200 MB) are suitable for transmission over any
-/// length-prefixed transport. The serialization includes versioning information.
-pub fn serialize_server_context(ctx: &ServerContext) -> Result<Vec<u8>, Error> {
+/// Maximum gRPC message size for both encoding and decoding ends.
+/// Mirrored on the server (`InferenceServiceServer`) and the client
+/// (`WeirwoodClient` / `InferenceServiceClient`) so the large `InitSession`
+/// payload (~180 MB) isn't rejected by tonic's 4 MB default.
+pub const MAX_GRPC_MESSAGE_BYTES: usize = 512 * 1024 * 1024;
+
+fn safe_to_bytes<T>(value: &T, what: &str) -> Result<Vec<u8>, Error>
+where
+    T: serde::Serialize + Versionize + Named,
+{
     let mut buf = Vec::new();
-    safe_serialize(&ctx.server_key, &mut buf, SIZE_LIMIT_BYTES)
-        .map_err(|e| Error::Fhe(format!("failed to serialize server key: {}", e)))?;
+    safe_serialize(value, &mut buf, SIZE_LIMIT_BYTES)
+        .map_err(|e| Error::Fhe(format!("failed to serialize {what}: {e}")))?;
     Ok(buf)
 }
 
-/// Deserialize a `ServerContext` from bytes using TFHE's safe deserialization.
-///
-/// Expects bytes produced by `serialize_server_context`.
+fn safe_from_bytes<T>(bytes: &[u8], what: &str) -> Result<T, Error>
+where
+    T: serde::de::DeserializeOwned + Unversionize + Named,
+{
+    safe_deserialize(&mut Cursor::new(bytes), SIZE_LIMIT_BYTES)
+        .map_err(|e| Error::Fhe(format!("failed to deserialize {what}: {e}")))
+}
+
+/// Serialize a [`ServerContext`]'s server key (~100–200 MB) for transport.
+pub fn serialize_server_context(ctx: &ServerContext) -> Result<Vec<u8>, Error> {
+    safe_to_bytes(&ctx.server_key, "server key")
+}
+
+/// Deserialize a [`ServerContext`] from bytes produced by [`serialize_server_context`].
 pub fn deserialize_server_context(bytes: &[u8]) -> Result<ServerContext, Error> {
-    let mut reader = Cursor::new(bytes);
-    let server_key: tfhe::ServerKey = safe_deserialize(&mut reader, SIZE_LIMIT_BYTES)
-        .map_err(|e| Error::Fhe(format!("failed to deserialize server key: {}", e)))?;
+    let server_key: tfhe::ServerKey = safe_from_bytes(bytes, "server key")?;
     Ok(ServerContext::from_key(server_key))
 }
 
-/// Serialize a single encrypted feature (`FheInt32`) to bytes.
+/// Serialize a single encrypted feature (`FheInt32`).
 pub fn serialize_feature(feature: &tfhe::FheInt32) -> Result<Vec<u8>, Error> {
-    let mut buf = Vec::new();
-    safe_serialize(feature, &mut buf, SIZE_LIMIT_BYTES)
-        .map_err(|e| Error::Fhe(format!("failed to serialize feature: {}", e)))?;
-    Ok(buf)
+    safe_to_bytes(feature, "feature")
 }
 
-/// Deserialize a single encrypted feature from bytes.
+/// Deserialize a single encrypted feature.
 pub fn deserialize_feature(bytes: &[u8]) -> Result<tfhe::FheInt32, Error> {
-    let mut reader = Cursor::new(bytes);
-    safe_deserialize(&mut reader, SIZE_LIMIT_BYTES)
-        .map_err(|e| Error::Fhe(format!("failed to deserialize feature: {}", e)))
+    safe_from_bytes(bytes, "feature")
 }
 
-/// Serialize an encrypted score to bytes.
+/// Serialize an encrypted score.
 pub fn serialize_score(score: &EncryptedScore) -> Result<Vec<u8>, Error> {
-    let mut buf = Vec::new();
-    safe_serialize(score, &mut buf, SIZE_LIMIT_BYTES)
-        .map_err(|e| Error::Fhe(format!("failed to serialize encrypted score: {}", e)))?;
-    Ok(buf)
+    safe_to_bytes(score, "encrypted score")
 }
 
-/// Deserialize an encrypted score from bytes.
+/// Deserialize an encrypted score.
 pub fn deserialize_score(bytes: &[u8]) -> Result<EncryptedScore, Error> {
-    let mut reader = Cursor::new(bytes);
-    safe_deserialize(&mut reader, SIZE_LIMIT_BYTES)
-        .map_err(|e| Error::Fhe(format!("failed to deserialize encrypted score: {}", e)))
+    safe_from_bytes(bytes, "encrypted score")
 }
 
 /// Serialize an encrypted input (feature vector) to bytes.

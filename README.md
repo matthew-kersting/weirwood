@@ -186,7 +186,7 @@ benchmarks/
 
 ```sh
 cargo build   # tfhe-rs is a required dependency — expect a longer first compile
-cargo test
+cargo test --release
 
 # For network transport layer (gRPC-compatible server and client examples)
 cargo build --features transport

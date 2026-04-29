@@ -75,11 +75,7 @@ impl PlaintextEvaluator {
     /// belonging to class `k` (the global `base_score` is added to every class).
     ///
     /// Panics if the model's objective is not `MultiSoftmax`.
-    pub fn predict_multiclass(
-        &self,
-        weirwood_tree: &WeirwoodTree,
-        features: &[f32],
-    ) -> Vec<f32> {
+    pub fn predict_multiclass(&self, weirwood_tree: &WeirwoodTree, features: &[f32]) -> Vec<f32> {
         let num_class = match &weirwood_tree.objective {
             Objective::MultiSoftmax { num_class } => *num_class,
             other => panic!(
@@ -109,7 +105,8 @@ impl PlaintextEvaluator {
     }
 }
 
-fn sigmoid(x: f32) -> f32 {
+/// Logistic sigmoid — used as the activation for `binary:logistic` models.
+pub(crate) fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
 }
 
