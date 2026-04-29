@@ -68,7 +68,7 @@ impl InferenceService for WeirwoodInference {
             .insert(session_id.clone(), evaluator);
 
         println!(
-            "[init] Session {session_id} created (server key {} MB)",
+            "[init] Session created (server key {} MB)",
             req.server_key.len() / 1_000_000
         );
 
@@ -111,7 +111,7 @@ impl InferenceService for WeirwoodInference {
         let score_bytes = serialize_score(&encrypted_score)
             .map_err(|e| Status::internal(format!("failed to serialize score: {e}")))?;
 
-        println!("[predict] Session {} completed", req.session_id);
+        println!("[predict] Session completed");
 
         Ok(Response::new(PredictResponse {
             encrypted_score: score_bytes,
