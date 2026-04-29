@@ -93,14 +93,13 @@ pub type EncryptedScore = tfhe::FheInt32;
 /// let client = ClientContext::generate()?;
 /// let server_ctx = client.server_context(); // only the ServerKey is shared
 ///
-/// let model = WeirwoodTree::from_json_file("model.json")?;
-/// let features = vec![1.5_f32, 0.3, -2.1];
-/// let ciphertext = client.encrypt(&features);
+/// let model = WeirwoodTree::from_file("model.ubj")?;
+/// let ciphertext = client.encrypt(&[1.5_f32, 0.3, -2.1]);
 ///
 /// // --- "Send server_ctx and ciphertext to the server" ---
 ///
 /// // --- Server ---
-/// let evaluator = FheEvaluator::new(server_ctx); // installs key on worker threads
+/// let evaluator = FheEvaluator::try_new(&model, server_ctx)?;
 /// let encrypted_score = evaluator.predict(&model, &ciphertext);
 ///
 /// // --- "Send encrypted_score back to the client" ---

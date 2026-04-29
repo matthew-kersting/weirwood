@@ -1,17 +1,18 @@
 //! End-to-end gRPC client demo using the high-level [`WeirwoodClient`].
 //!
 //! Shows the one-call flow most users want: connect → predict_proba. The
-//! protocol-level types (InferenceServiceClient, InitSession/Predict request
-//! and response messages) remain available at `weirwood::transport::*` for
-//! callers that need finer control.
+//! server reports the model's metadata at session setup, so the client never
+//! loads the XGBoost file itself.
+//!
+//! The protocol-level types (InferenceServiceClient, InitSession/Predict
+//! request and response messages) remain available at
+//! `weirwood::transport::*` for callers that need finer control.
 //!
 //! Usage:
 //!   cargo run --release --example client --features transport \
 //!     [-- --server http://127.0.0.1:9999]
 
-use weirwood::{eval::PlaintextEvaluator, model::WeirwoodTree, transport::WeirwoodClient};
-
-const DEFAULT_MODEL: &str = "tests/fixtures/trained_binary.ubj";
+use weirwood::transport::WeirwoodClient;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -24,23 +25,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    println!("Loading model from {DEFAULT_MODEL}…");
-    let model = WeirwoodTree::from_file(DEFAULT_MODEL)?;
-    println!(
-        "Model loaded: {} trees, {} features, objective: {:?}",
-        model.trees.len(),
-        model.num_features,
-        model.objective
-    );
-
-    println!();
     println!("Connecting to {server_addr} (this includes ~1-3 s of FHE keygen)…");
     let mut client = WeirwoodClient::connect(server_addr).await?;
-    println!("Session established.");
+    println!(
+        "Session {} established. Server reports objective {:?}, {} features.",
+        client.session_id(),
+        client.objective(),
+        client.num_features()
+    );
 
     let make_features = |first_val: f32| -> Vec<f32> {
         let mut v = vec![first_val];
-        v.extend(std::iter::repeat_n(0.0_f32, model.num_features - 1));
+        v.extend(std::iter::repeat_n(0.0_f32, client.num_features() - 1));
         v
     };
 
@@ -52,17 +48,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!();
     println!("Running {} test inferences…", test_cases.len());
-    println!(
-        "{:<35} {:<15} {:<15} {:<10}",
-        "Test case", "Plaintext", "FHE", "Δ"
-    );
-    println!("{}", "-".repeat(78));
+    println!("{:<35} {:<15}", "Test case", "FHE prediction");
+    println!("{}", "-".repeat(55));
 
     for (name, features) in test_cases {
-        let plaintext = PlaintextEvaluator.predict_proba(&model, &features)?;
-        let fhe = client.predict_proba(&model, &features).await?;
-        let delta = (fhe - plaintext).abs();
-        println!("{name:<35} {plaintext:<15.6} {fhe:<15.6} {delta:<10.6}");
+        let proba = client.predict_proba(&features).await?;
+        println!("{name:<35} {proba:<15.6}");
     }
 
     println!();

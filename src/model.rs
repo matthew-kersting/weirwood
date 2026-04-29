@@ -88,7 +88,10 @@ pub enum Objective {
 }
 
 impl Objective {
-    fn from_str(objective_name: &str, num_class: usize) -> Self {
+    /// Parse XGBoost's textual objective name (e.g. `"binary:logistic"`) into
+    /// a typed [`Objective`]. `num_class` is only consulted for
+    /// `multi:softmax` / `multi:softprob` — pass `0` otherwise.
+    pub fn from_str(objective_name: &str, num_class: usize) -> Self {
         match objective_name {
             "binary:logistic" => Self::BinaryLogistic,
             "reg:squarederror" | "reg:linear" => Self::RegSquaredError,

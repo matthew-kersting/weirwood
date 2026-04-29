@@ -1,0 +1,11 @@
+[package]
+name = "fhe_local"
+version = "0.1.0"
+edition = "2024"
+
+# Empty `[workspace]` makes this an independent project — copy this folder
+# anywhere and `cargo run --release` just works.
+[workspace]
+
+[dependencies]
+weirwood = "1.0"

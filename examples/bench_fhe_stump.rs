@@ -39,7 +39,7 @@ fn main() -> Result<(), weirwood::Error> {
         .nth(1)
         .unwrap_or_else(|| DEFAULT_MODEL.to_string());
 
-    let model = WeirwoodTree::from_json_file(&model_path)?;
+    let model = WeirwoodTree::from_file(&model_path)?;
     let features: Vec<f32> = vec![0.0]; // left-branch probe
 
     println!("weirwood · stump inference benchmark");

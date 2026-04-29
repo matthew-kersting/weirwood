@@ -4,9 +4,13 @@
 //!   1. Open a gRPC connection to a `weirwood` inference server.
 //!   2. Generate a fresh FHE keypair locally.
 //!   3. Upload the [`ServerKey`](tfhe::ServerKey) via `InitSession` and
-//!      remember the session id.
+//!      remember the session id and the [`ModelInfo`](super::ModelInfo) the
+//!      server reports.
 //!   4. On each predict call: encrypt features → `Predict` RPC → decrypt
 //!      result → apply the model's activation function.
+//!
+//! Because the server reports the model's feature count and objective at
+//! session-init time, the client never has to load the XGBoost model itself.
 //!
 //! The protocol-level types ([`InferenceServiceClient`](super::InferenceServiceClient),
 //! the `Predict` / `InitSession` request and response messages) remain
@@ -18,7 +22,7 @@ use tonic::{Request, Status};
 use crate::Error;
 use crate::eval::fhe::ClientContext;
 use crate::eval::sigmoid;
-use crate::model::{Objective, WeirwoodTree};
+use crate::model::Objective;
 
 use super::rpc::inference_service_client::InferenceServiceClient;
 use super::rpc::{InitSessionRequest, PredictRequest};
@@ -29,9 +33,9 @@ use super::{
 /// High-level FHE inference client.
 ///
 /// Holds a connected [`InferenceServiceClient`], a [`ClientContext`] (which
-/// owns the private key and never leaves the process), and an active
-/// `session_id` that ties subsequent `Predict` calls back to the uploaded
-/// server key on the remote.
+/// owns the private key and never leaves the process), the active
+/// `session_id`, and the model metadata the server reported at session
+/// setup.
 ///
 /// Created via [`WeirwoodClient::connect`]. The inner `ClientContext` is not
 /// `Clone`, so wrap in `Arc<Mutex<WeirwoodClient>>` if multiple tasks need
@@ -40,6 +44,8 @@ pub struct WeirwoodClient {
     grpc: InferenceServiceClient<Channel>,
     fhe: ClientContext,
     session_id: String,
+    num_features: usize,
+    objective: Objective,
 }
 
 impl WeirwoodClient {
@@ -77,10 +83,20 @@ impl WeirwoodClient {
             .map_err(status_to_error)?
             .into_inner();
 
+        let info = resp.model_info.ok_or_else(|| {
+            Error::Transport(
+                "InitSessionResponse missing model_info — server is too old or out of spec"
+                    .to_string(),
+            )
+        })?;
+        let objective = Objective::from_str(&info.objective_name, info.num_class as usize);
+
         Ok(Self {
             grpc,
             fhe,
             session_id: resp.session_id,
+            num_features: info.num_features as usize,
+            objective,
         })
     }
 
@@ -92,13 +108,9 @@ impl WeirwoodClient {
     /// this on a multi-class model returns `Err(Error::Format)`. Use
     /// [`predict_raw`](Self::predict_raw) if you need to apply your own
     /// activation.
-    pub async fn predict_proba(
-        &mut self,
-        model: &WeirwoodTree,
-        features: &[f32],
-    ) -> Result<f32, Error> {
+    pub async fn predict_proba(&mut self, features: &[f32]) -> Result<f32, Error> {
         let raw = self.predict_raw(features).await?;
-        match &model.objective {
+        match &self.objective {
             Objective::BinaryLogistic => Ok(sigmoid(raw)),
             Objective::RegSquaredError | Objective::Other(_) => Ok(raw),
             Objective::MultiSoftmax { num_class } => Err(Error::Format(format!(
@@ -112,10 +124,18 @@ impl WeirwoodClient {
     /// Run inference and return the raw (pre-activation) decrypted score.
     /// Useful when the caller wants to apply its own activation.
     ///
-    /// For multi-class models the server will eventually return one element
-    /// per class; until then this method takes the first element of the
-    /// response and errors if the response is empty.
+    /// Returns `Err(Error::Format)` if `features.len()` doesn't match the
+    /// number of features the server reported at session setup, and
+    /// `Err(Error::Transport)` if the server returns an empty response.
     pub async fn predict_raw(&mut self, features: &[f32]) -> Result<f32, Error> {
+        if features.len() != self.num_features {
+            return Err(Error::Format(format!(
+                "model expects {} features, got {}",
+                self.num_features,
+                features.len()
+            )));
+        }
+
         let encrypted = self.fhe.encrypt(features);
         let mut feature_bytes = Vec::with_capacity(encrypted.len());
         for feat in &encrypted {
@@ -140,9 +160,20 @@ impl WeirwoodClient {
         Ok(self.fhe.decrypt_score(&encrypted_score))
     }
 
-    /// Borrow the server-assigned session id (handy for logging).
+    /// Server-assigned session id (handy for logging).
     pub fn session_id(&self) -> &str {
         &self.session_id
+    }
+
+    /// Number of features the server's model expects per `Predict` call.
+    pub fn num_features(&self) -> usize {
+        self.num_features
+    }
+
+    /// Objective the server's model was trained for (drives the activation
+    /// applied by [`predict_proba`](Self::predict_proba)).
+    pub fn objective(&self) -> &Objective {
+        &self.objective
     }
 }
 

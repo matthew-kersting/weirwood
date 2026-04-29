@@ -18,10 +18,12 @@ use tfhe::ServerKey;
 /// Server-side FHE context — contains only the [`ServerKey`], no private key.
 ///
 /// Obtain a `ServerContext` from [`ClientContext::server_context`]; do not
-/// construct one directly. Pass it to [`FheEvaluator::new`] to create an
-/// evaluator that can run inference on encrypted inputs.
+/// construct one directly. Pass it to [`FheEvaluator::try_new`] (or the
+/// unchecked [`FheEvaluator::new`]) to create an evaluator that can run
+/// inference on encrypted inputs.
 ///
 /// [`ClientContext::server_context`]: super::client::ClientContext::server_context
+/// [`FheEvaluator::try_new`]: super::evaluator::FheEvaluator::try_new
 /// [`FheEvaluator::new`]: super::evaluator::FheEvaluator::new
 pub struct ServerContext {
     pub(crate) server_key: ServerKey,

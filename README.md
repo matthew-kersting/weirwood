@@ -18,7 +18,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-weirwood = "0.4"
+weirwood = "1.0"
 ```
 
 ### Plaintext inference
@@ -120,22 +120,21 @@ In a single-process deployment (as in the examples) both parties run in the same
 
 ### Networked deployment (gRPC)
 
-With the `transport` feature enabled, the crate exposes a real gRPC contract built from `proto/inference.proto` via `tonic-build`. Servers implement [`InferenceService`](src/transport/rpc.rs) and serve it under `tonic::transport::Server` — see [`examples/server.rs`](examples/server.rs) for a 100-line working server. Clients can either drive the generated `InferenceServiceClient` themselves or use the high-level [`WeirwoodClient`](src/transport/client.rs) which bundles key-generation, session setup, encrypt, RPC, decrypt, and activation into a single call:
+With the `transport` feature enabled, the crate exposes a real gRPC contract built from `proto/inference.proto` via `tonic-build`. Servers implement [`InferenceService`](src/transport/rpc.rs) and serve it under `tonic::transport::Server` — see [`examples/server.rs`](examples/server.rs) for a working server. The server reports the loaded model's shape (`num_features`, `objective`) inside `InitSessionResponse`, so the client never has to ship the XGBoost model. Clients can either drive the generated `InferenceServiceClient` themselves or use the high-level [`WeirwoodClient`](src/transport/client.rs):
 
 ```rust,no_run
-use weirwood::{model::WeirwoodTree, transport::WeirwoodClient};
+use weirwood::transport::WeirwoodClient;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let model = WeirwoodTree::from_file("model.ubj")?;
     let mut client = WeirwoodClient::connect("http://127.0.0.1:9999").await?;
-    let proba = client.predict_proba(&model, &[1.0, 0.5, 3.2, 0.1]).await?;
+    let proba = client.predict_proba(&[1.0, 0.5, 3.2, 0.1]).await?;
     println!("prediction: {proba:.4}");
     Ok(())
 }
 ```
 
-The protocol-level types (`InferenceServiceClient`, `InitSessionRequest`/`Response`, `PredictRequest`/`Response`) remain available at `weirwood::transport::*` for callers that need finer control.
+The protocol-level types (`InferenceServiceClient`, `InitSessionRequest`/`Response`, `ModelInfo`, `PredictRequest`/`Response`) remain available at `weirwood::transport::*` for callers that need finer control.
 
 ## Project layout
 
@@ -170,6 +169,11 @@ examples/
   server.rs                 minimal tonic InferenceService server     (transport feature)
   client.rs                 WeirwoodClient end-to-end demo            (transport feature)
   measure_transport_sizes.rs   reports on-the-wire ServerKey / ciphertext byte sizes
+
+demo/
+  fhe_local/                self-contained single-file in-process FHE demo
+  fhe_grpc/                 self-contained client + server gRPC demo
+  README.md                 how to run the bundled demos
 
 tests/
   integration.rs            end-to-end plaintext + FHE correctness tests

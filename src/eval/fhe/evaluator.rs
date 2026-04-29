@@ -46,12 +46,13 @@ thread_local! {
 /// let client = ClientContext::generate()?;
 /// let server_ctx = client.server_context();
 ///
-/// let model = WeirwoodTree::from_json_file("model.json")?;
+/// let model = WeirwoodTree::from_file("model.ubj")?;
 /// let ciphertext = client.encrypt(&[1.5_f32, 0.3]);
 ///
-/// // FheEvaluator::new installs the server key on its worker threads;
-/// // predict() lazily installs it on the calling thread on first use.
-/// let evaluator = FheEvaluator::new(server_ctx);
+/// // try_new validates the model for FHE evaluation and installs the server
+/// // key on worker threads; predict() lazily installs it on the calling
+/// // thread on first use.
+/// let evaluator = FheEvaluator::try_new(&model, server_ctx)?;
 /// let encrypted_score = evaluator.predict(&model, &ciphertext);
 ///
 /// let score = client.decrypt_score(&encrypted_score);

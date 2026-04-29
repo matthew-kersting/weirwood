@@ -39,7 +39,9 @@ pub use rpc::inference_service_server::{InferenceService, InferenceServiceServer
 /// callers who want to drive the protocol themselves.
 pub use rpc::inference_service_client::InferenceServiceClient;
 
-pub use rpc::{InitSessionRequest, InitSessionResponse, PredictRequest, PredictResponse};
+pub use rpc::{
+    InitSessionRequest, InitSessionResponse, ModelInfo, PredictRequest, PredictResponse,
+};
 
 use std::io::Cursor;
 
@@ -49,6 +51,34 @@ use tfhe::{Unversionize, Versionize};
 
 use crate::Error;
 use crate::eval::fhe::{EncryptedScore, ServerContext};
+use crate::model::{Objective, WeirwoodTree};
+
+impl ModelInfo {
+    /// Build a [`ModelInfo`] from a loaded [`WeirwoodTree`] for inclusion in
+    /// `InitSessionResponse`. The client uses this to learn the model's
+    /// shape without having to ship the XGBoost file.
+    pub fn from_model(model: &WeirwoodTree) -> Self {
+        let (objective_name, num_class) = match &model.objective {
+            Objective::BinaryLogistic => ("binary:logistic".to_string(), 0),
+            Objective::RegSquaredError => ("reg:squarederror".to_string(), 0),
+            Objective::MultiSoftmax { num_class } => {
+                ("multi:softmax".to_string(), *num_class as u32)
+            }
+            Objective::Other(name) => (name.clone(), 0),
+        };
+        Self {
+            num_features: model.num_features as u32,
+            objective_name,
+            num_class,
+        }
+    }
+}
+
+impl From<&WeirwoodTree> for ModelInfo {
+    fn from(model: &WeirwoodTree) -> Self {
+        Self::from_model(model)
+    }
+}
 
 /// Maximum payload size accepted by [`safe_serialize`] / [`safe_deserialize`].
 /// 512 MB is generous headroom over the ~180 MB serialized `ServerKey`.

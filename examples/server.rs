@@ -31,7 +31,7 @@ use weirwood::{
     model::WeirwoodTree,
     transport::{
         InferenceService, InferenceServiceServer, InitSessionRequest, InitSessionResponse,
-        MAX_GRPC_MESSAGE_BYTES, PredictRequest, PredictResponse, deserialize_feature,
+        MAX_GRPC_MESSAGE_BYTES, ModelInfo, PredictRequest, PredictResponse, deserialize_feature,
         deserialize_server_context, serialize_score,
     },
 };
@@ -91,7 +91,10 @@ impl InferenceService for WeirwoodInference {
             req.server_key.len() / 1_000_000
         );
 
-        Ok(Response::new(InitSessionResponse { session_id }))
+        Ok(Response::new(InitSessionResponse {
+            session_id,
+            model_info: Some(ModelInfo::from_model(&self.model)),
+        }))
     }
 
     async fn predict(
