@@ -150,7 +150,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("warning: {w}");
     }
     if !warnings.is_empty() {
-        return Err(format!("model has {} FHE-safety warnings; refusing to start", warnings.len()).into());
+        return Err(format!(
+            "model has {} FHE-safety warnings; refusing to start",
+            warnings.len()
+        )
+        .into());
     }
     println!(
         "Model: {} trees, {} features",
