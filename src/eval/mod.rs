@@ -9,9 +9,13 @@ pub mod fhe;
 use crate::model::{Objective, WeirwoodTree};
 
 /// Trait implemented by any inference backend (plaintext or encrypted).
+///
+/// `Input` is `?Sized` so backends can choose the idiomatic borrow shape
+/// (e.g. `[f32]` instead of `Vec<f32>`).  Callers pass `&features` and the
+/// usual `Vec → slice` deref coercion just works.
 pub trait Evaluator {
     /// The type of a single feature vector the evaluator accepts.
-    type Input;
+    type Input: ?Sized;
     /// The type of the raw pre-activation score returned.
     type Output;
 
@@ -27,10 +31,10 @@ pub trait Evaluator {
 pub struct PlaintextEvaluator;
 
 impl Evaluator for PlaintextEvaluator {
-    type Input = Vec<f32>;
+    type Input = [f32];
     type Output = f32;
 
-    fn predict(&self, weirwood_tree: &WeirwoodTree, features: &Vec<f32>) -> f32 {
+    fn predict(&self, weirwood_tree: &WeirwoodTree, features: &[f32]) -> f32 {
         let raw_score: f32 = weirwood_tree
             .trees
             .iter()
@@ -45,20 +49,73 @@ impl PlaintextEvaluator {
     ///
     /// - `BinaryLogistic` → sigmoid
     /// - `RegSquaredError` → identity
-    /// - `MultiSoftmax` → softmax over per-class scores (returns only class 0 for now)
-    pub fn predict_proba(&self, weirwood_tree: &WeirwoodTree, features: &Vec<f32>) -> f32 {
-        let raw_score: f32 = self.predict(weirwood_tree, features);
+    /// - `MultiSoftmax` → **panics**; multi-class returns a vector of class
+    ///   probabilities, which doesn't fit this method's `f32` return type.
+    ///   Use [`Self::predict_multiclass_proba`] instead.
+    pub fn predict_proba(&self, weirwood_tree: &WeirwoodTree, features: &[f32]) -> f32 {
         match &weirwood_tree.objective {
-            Objective::BinaryLogistic => sigmoid(raw_score),
-            Objective::RegSquaredError => raw_score,
-            Objective::MultiSoftmax { .. } => sigmoid(raw_score), // placeholder
-            Objective::Other(_) => raw_score,
+            Objective::BinaryLogistic => sigmoid(self.predict(weirwood_tree, features)),
+            Objective::RegSquaredError => self.predict(weirwood_tree, features),
+            Objective::MultiSoftmax { num_class } => panic!(
+                "predict_proba returns a single f32; multi:softmax with num_class={} \
+                 produces a vector of class probabilities — use predict_multiclass_proba instead",
+                num_class
+            ),
+            Objective::Other(_) => self.predict(weirwood_tree, features),
         }
+    }
+
+    /// Per-class raw (pre-activation) scores for an XGBoost `multi:softmax` /
+    /// `multi:softprob` model.
+    ///
+    /// XGBoost multi-class models are trained as one regression tree per class
+    /// per boosting round, with trees interleaved by class:
+    /// `tree[i]` contributes to class `i % num_class`. The returned vector has
+    /// length `num_class`; entry `k` is the sum of leaf values from every tree
+    /// belonging to class `k` (the global `base_score` is added to every class).
+    ///
+    /// Panics if the model's objective is not `MultiSoftmax`.
+    pub fn predict_multiclass(&self, weirwood_tree: &WeirwoodTree, features: &[f32]) -> Vec<f32> {
+        let num_class = match &weirwood_tree.objective {
+            Objective::MultiSoftmax { num_class } => *num_class,
+            other => panic!(
+                "predict_multiclass requires a MultiSoftmax objective, got {:?}",
+                other
+            ),
+        };
+        assert!(num_class > 0, "MultiSoftmax model must have num_class > 0");
+
+        let mut per_class = vec![weirwood_tree.base_score; num_class];
+        for (i, decision_tree) in weirwood_tree.trees.iter().enumerate() {
+            per_class[i % num_class] += decision_tree.evaluate(features);
+        }
+        per_class
+    }
+
+    /// Class probabilities for a `multi:softmax` / `multi:softprob` model.
+    ///
+    /// Computes per-class raw scores via [`Self::predict_multiclass`] and
+    /// applies a numerically-stable softmax. Output sums to 1.
+    pub fn predict_multiclass_proba(
+        &self,
+        weirwood_tree: &WeirwoodTree,
+        features: &[f32],
+    ) -> Vec<f32> {
+        softmax(&self.predict_multiclass(weirwood_tree, features))
     }
 }
 
 fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
+}
+
+/// Numerically-stable softmax: subtract the max before exponentiating to
+/// avoid overflow on large logits.
+fn softmax(logits: &[f32]) -> Vec<f32> {
+    let max = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let exps: Vec<f32> = logits.iter().map(|x| (x - max).exp()).collect();
+    let sum: f32 = exps.iter().sum();
+    exps.into_iter().map(|e| e / sum).collect()
 }
 
 #[cfg(test)]
@@ -425,5 +482,154 @@ mod tests {
             -0.5,
             epsilon = 1e-6
         );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Softmax / multi-class
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn softmax_uniform_logits_is_uniform() {
+        let p = softmax(&[1.0, 1.0, 1.0]);
+        approx::assert_abs_diff_eq!(p[0], 1.0 / 3.0, epsilon = 1e-6);
+        approx::assert_abs_diff_eq!(p[1], 1.0 / 3.0, epsilon = 1e-6);
+        approx::assert_abs_diff_eq!(p[2], 1.0 / 3.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn softmax_sums_to_one() {
+        let p = softmax(&[-2.0, 0.5, 3.1]);
+        let sum: f32 = p.iter().sum();
+        approx::assert_abs_diff_eq!(sum, 1.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn softmax_is_numerically_stable_on_large_logits() {
+        // Without the max-subtraction trick, exp(1000) overflows to +inf and
+        // the result becomes NaN. A correct implementation handles this.
+        let p = softmax(&[1000.0, 1000.0, 999.0]);
+        let sum: f32 = p.iter().sum();
+        assert!(sum.is_finite(), "softmax must not overflow on large logits");
+        approx::assert_abs_diff_eq!(sum, 1.0, epsilon = 1e-5);
+        // Classes 0 and 1 have equal logits and should share the bulk of mass.
+        approx::assert_abs_diff_eq!(p[0], p[1], epsilon = 1e-6);
+        assert!(p[2] < p[0]);
+    }
+
+    /// Three-class model with one stump per class, interleaved by class index.
+    /// Class k's stump returns +1.0 when `feature[0] == k as f32`, else 0.0,
+    /// so `predict_multiclass` should return `1.0` at the "selected" class
+    /// and `0.0` elsewhere.
+    fn three_class_model() -> WeirwoodTree {
+        let stump_for_value = |target: f32| Tree {
+            // Stump: feature[0] <= target - 0.5 → 0.0, else (feature[0] <= target + 0.5 → 1.0, else 0.0).
+            // We approximate with two splits.
+            nodes: vec![
+                Node {
+                    split_feature: 0,
+                    split_threshold: target - 0.5,
+                    left_child: 1,
+                    right_child: 2,
+                    leaf_value: 0.0,
+                },
+                Node {
+                    split_feature: 0,
+                    split_threshold: 0.0,
+                    left_child: -1,
+                    right_child: -1,
+                    leaf_value: 0.0,
+                },
+                Node {
+                    split_feature: 0,
+                    split_threshold: target + 0.5,
+                    left_child: 3,
+                    right_child: 4,
+                    leaf_value: 0.0,
+                },
+                Node {
+                    split_feature: 0,
+                    split_threshold: 0.0,
+                    left_child: -1,
+                    right_child: -1,
+                    leaf_value: 1.0,
+                },
+                Node {
+                    split_feature: 0,
+                    split_threshold: 0.0,
+                    left_child: -1,
+                    right_child: -1,
+                    leaf_value: 0.0,
+                },
+            ],
+        };
+        WeirwoodTree {
+            // Interleaved: tree[0] → class 0, tree[1] → class 1, tree[2] → class 2.
+            trees: vec![
+                stump_for_value(0.0),
+                stump_for_value(1.0),
+                stump_for_value(2.0),
+            ],
+            objective: Objective::MultiSoftmax { num_class: 3 },
+            base_score: 0.0,
+            num_features: 1,
+        }
+    }
+
+    #[test]
+    fn multiclass_routes_trees_by_class_index() {
+        let tree = three_class_model();
+        // feature=1.0 → only the class-1 stump fires.
+        let raw = PlaintextEvaluator.predict_multiclass(&tree, &vec![1.0]);
+        assert_eq!(raw.len(), 3);
+        approx::assert_abs_diff_eq!(raw[0], 0.0, epsilon = 1e-6);
+        approx::assert_abs_diff_eq!(raw[1], 1.0, epsilon = 1e-6);
+        approx::assert_abs_diff_eq!(raw[2], 0.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn multiclass_proba_argmax_matches_dominant_class() {
+        let tree = three_class_model();
+        let p = PlaintextEvaluator.predict_multiclass_proba(&tree, &vec![2.0]);
+        let sum: f32 = p.iter().sum();
+        approx::assert_abs_diff_eq!(sum, 1.0, epsilon = 1e-6);
+        let argmax = p
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .unwrap()
+            .0;
+        assert_eq!(argmax, 2);
+    }
+
+    #[test]
+    fn multiclass_base_score_is_added_to_every_class() {
+        let mut tree = three_class_model();
+        tree.base_score = 0.25;
+        // feature far from every stump's selected value → all stumps return 0.0;
+        // each class's raw score should be exactly base_score.
+        let raw = PlaintextEvaluator.predict_multiclass(&tree, &vec![10.0]);
+        approx::assert_abs_diff_eq!(raw[0], 0.25, epsilon = 1e-6);
+        approx::assert_abs_diff_eq!(raw[1], 0.25, epsilon = 1e-6);
+        approx::assert_abs_diff_eq!(raw[2], 0.25, epsilon = 1e-6);
+        // Equal logits → uniform softmax.
+        let p = PlaintextEvaluator.predict_multiclass_proba(&tree, &vec![10.0]);
+        approx::assert_abs_diff_eq!(p[0], 1.0 / 3.0, epsilon = 1e-6);
+        approx::assert_abs_diff_eq!(p[1], 1.0 / 3.0, epsilon = 1e-6);
+        approx::assert_abs_diff_eq!(p[2], 1.0 / 3.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    #[should_panic(expected = "predict_multiclass_proba")]
+    fn predict_proba_panics_on_multiclass_objective() {
+        let mut tree = tiny_tree();
+        tree.objective = Objective::MultiSoftmax { num_class: 3 };
+        let _ = PlaintextEvaluator.predict_proba(&tree, &vec![0.5]);
+    }
+
+    #[test]
+    #[should_panic(expected = "MultiSoftmax")]
+    fn predict_multiclass_panics_on_binary_objective() {
+        let tree = tiny_tree(); // BinaryLogistic
+        let _ = PlaintextEvaluator.predict_multiclass(&tree, &vec![0.5]);
     }
 }

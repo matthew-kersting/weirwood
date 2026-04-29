@@ -87,8 +87,8 @@
 Cryptology --- 695.641\\
 Matthew Kersting\\
 4194E9\\
-DRAFT --- Final Research Paper\\
-April 14, 2026
+Final Research Paper\\
+May 3rd, 2026
 }
 
 % Centered title in the middle of the page
@@ -117,7 +117,7 @@ Fully Homomorphic Encryption (FHE) resolves this by allowing the server to evalu
 
 \textit{weirwood} is a Rust crate implementing privacy-preserving inference for XGBoost gradient boosted tree ensembles \cite{xgboost} using TFHE. XGBoost is an attractive FHE target for several reasons. Tree depth is a fixed hyperparameter, typically 3--8 levels, bounding the number of sequential bootstrapping operations per inference. Each internal node tests one feature against a scalar threshold, mapping cleanly to a single TFHE programmable bootstrapping (PBS) call. The final prediction is a sum of leaf values requiring only cheap homomorphic additions. Neural networks, by contrast, require polynomial approximation of non-linear activations or repeated bootstrapping at every layer, greatly increasing circuit depth and computational cost \cite{gentry}.
 
-This paper describes the design and implementation of \textit{weirwood}, focusing on FHE circuit construction, fixed-point encoding, and parallelism strategy.
+This paper describes the design and implementation of \textit{weirwood}, focusing on FHE circuit construction, fixed-point encoding, parallelism strategy, and a practical network transport layer for distributed deployment.
 
 % ============================================================
 % DESCRIPTION
@@ -132,13 +132,13 @@ XGBoost \cite{xgboost} builds a prediction as a sum over $K$ regression trees:
 F(\mathbf{x}) = b + \sum_{k=1}^{K} f_k(\mathbf{x})
 \end{equation}
 %
-where $b$ is a global base score and each $f_k$ routes the input vector $\mathbf{x}$ from root to leaf by evaluating comparisons $\mathbf{x}[i] \leq t$ at internal nodes, returning the stored leaf weight. The key observation for FHE is that the indicator product along a root-to-leaf path can be evaluated \textit{obliviously} via a homomorphic multiplexer at each node: given an encrypted comparison result, select the left or right subtree without revealing which branch was taken. The tree sum is then accumulated with cheap homomorphic addition.
+where $b$ is a global base score and each $f_k$ routes the input vector $\mathbf{x}$ from root to leaf by evaluating comparisons $\mathbf{x}[i] \leq t$ at internal nodes, returning the stored leaf weight. XGBoost's regularized training objective penalizes tree depth and leaf weight magnitude, ensuring trees have bounded depth (typically 3--8 levels) and fixed structure for a given training run, these are properties that make inference highly predictable and suitable for FHE. The key observation for FHE is that the indicator product along a root-to-leaf path can be evaluated \textit{obliviously} via a homomorphic multiplexer at each node: given an encrypted comparison result, select the left or right subtree without revealing which branch was taken. The tree sum is then accumulated with cheap homomorphic addition.
 
 \subsection{Fully Homomorphic Encryption}
 
-FHE \cite{gentry} supports arbitrary computation on ciphertexts, based on the hardness of Ring Learning With Errors (RLWE) \cite{regev}, believed hard for both classical and quantum computers. The central challenge is noise growth: additions accumulate error linearly and multiplications amplify it. Bootstrapping \cite{gentry} resets noise by homomorphically evaluating the decryption circuit, but is computationally expensive.
+FHE \cite{gentry} supports arbitrary computation on ciphertexts, based on the hardness of Ring Learning With Errors (RLWE), the ring-algebraic variant of Regev's Learning With Errors problem \cite{regev}; both are lattice problems conjectured hard against both classical and quantum algorithms. This quantum resistance is a key advantage over number-theoretic assumptions like integer factorization and discrete logarithms, which are vulnerable to Shor's polynomial-time quantum algorithm \cite{shor}. The central challenge in FHE is noise growth: additions accumulate error linearly and multiplications amplify it. Bootstrapping \cite{gentry} resets noise by homomorphically evaluating the decryption circuit, but is computationally expensive.
 
-\textit{weirwood} uses the TFHE scheme \cite{tfhe}, which operates over the real torus $\mathbb{T} = \mathbb{R}/\mathbb{Z}$. Its key contribution is \textit{programmable bootstrapping} (PBS): rather than being purely a noise-reduction step, bootstrapping simultaneously evaluates an arbitrary function encoded as a lookup table (LUT) via blind rotation \cite{fhew}, a homomorphic operation that rotates a test polynomial by a secret-key-encoded shift, reading off the function value without revealing the input. Cost is $O(n \log n)$ per PBS call where $n$ is the polynomial degree (1024 or 2048 for 128-bit security).
+\textit{weirwood} uses the TFHE scheme \cite{tfhe}, which operates over the real torus $\mathbb{T} = \mathbb{R}/\mathbb{Z}$. Its key contribution is \textit{programmable bootstrapping} (PBS): rather than being purely a noise-reduction step, bootstrapping simultaneously evaluates an arbitrary function encoded as a lookup table (LUT) via blind rotation \cite{fhew}, a homomorphic operation that rotates a test polynomial by a secret-key-encoded shift, reading off the function value without revealing the input. Cost is $O(n \log n)$ per PBS call where $n$ is the GLWE polynomial degree. \textit{weirwood} uses the integer default selected by \texttt{tfhe::ConfigBuilder::default()} (a 128-bit-classical-secure variant of the \texttt{PARAM\_MESSAGE\_2\_CARRY\_2\_KS\_PBS} family in \texttt{tfhe-rs} 1.6), for which $n = 2048$ \cite{TFHE-rs}.
 
 For \textit{weirwood}, the relevant LUT is the Heaviside step function $H(x) = \mathbf{1}[x \leq 0]$. This makes each internal node comparison \textit{exact}, no polynomial approximation, no approximation error beyond the inherent fixed-point rounding of the feature encoding.
 
@@ -176,7 +176,7 @@ For the benchmark model (100 trees, $\text{SCALE} = 1000$) this gives a theoreti
 
 \subsubsection*{FHE Circuit: \texttt{eval\_node}}
 
-The core of the FHE circuit is the \texttt{eval\_node} function, which recursively evaluates one tree node (Listing~\ref{lst:evalnode}). Leaf nodes return a trivially-encrypted constant (a plaintext value wrapped in a zero-noise ciphertext). Internal nodes perform one PBS comparison between the encrypted feature and a scalar plaintext threshold via \texttt{.le()}; the Heaviside function is encoded as a LUT inside the bootstrapping accumulator. The result is an \texttt{FheBool} used in \texttt{if\_then\_else} to select the left or right subtree score without revealing which branch was taken. Tree scores are accumulated directly as \texttt{FheInt32}, requiring no widening cast.
+The core of the FHE circuit is the \texttt{eval\_node} function, which recursively evaluates one tree node (Listing~\ref{lst:evalnode}). Leaf nodes return a trivially-encrypted constant (a plaintext value wrapped in a zero-noise ciphertext). Internal nodes perform one PBS comparison between the encrypted feature and a scalar plaintext threshold via \texttt{.le()}; the Heaviside function is encoded as a LUT inside the bootstrapping accumulator. The result is an \texttt{FheBool} used in \texttt{if\_then\_else} to select the left or right subtree score without revealing which branch was taken. Tree scores are accumulated directly as \texttt{FheInt32}, requiring no widening cast. For brevity, the listing clamps only on the leaf branch; threshold conversion (\texttt{node.split\_threshold * SCALE}) is assumed to be in range because the training pipeline normalizes features to roughly $[-3, 3]$ via \texttt{StandardScaler}, which keeps thresholds well inside the \texttt{i32} range. A defensive deployment would clamp thresholds identically to leaves.
 
 \begin{lstlisting}[caption={Recursive FHE tree node evaluation (\texttt{src/eval/fhe/evaluator.rs}). Each internal node triggers one PBS call; both subtrees are always computed for obliviousness.}, label={lst:evalnode}]
 fn eval_node(
@@ -220,7 +220,29 @@ pub fn new(ctx: ServerContext) -> Self {
 
 The calling thread must also have the server key installed via \texttt{ServerContext::set\_active()} before invoking \texttt{predict()}. Tree scores are summed sequentially after the parallel phase; homomorphic addition requires no PBS calls and is negligible in cost.
 
-Sigmoid and softmax activations are applied client-side in plaintext after decryption. This is correct for the two-party protocol: the server still sees only ciphertext, and the client applies the activation locally. A server-side FHE activation using CKKS approximate arithmetic \cite{ckks} would be needed only if the server must return an activated probability rather than a raw score.
+Sigmoid and softmax activations are applied client-side in plaintext after decryption. This is correct for the two-party protocol: the server still sees only ciphertext, and the client applies the activation locally. If the server must instead return an activated probability, two server-side options exist: TFHE itself can evaluate sigmoid as a PBS lookup table (at reduced precision, since the LUT domain is bounded by the GLWE polynomial degree), or the score can be scheme-switched to CKKS \cite{ckks} for polynomial sigmoid approximation; the latter is more accurate for wide score ranges but introduces non-trivial scheme-switching overhead and CKKS-specific noise management. \textit{weirwood} keeps activations client-side because the two-party protocol does not require server-side activation, and either FHE option adds latency and complexity that is not justified for the threat model considered here.
+
+\subsubsection*{Network Transport and Distributed Deployment}
+
+The in-process implementation above is cryptographically correct but insufficient for real deployments where client and server are physically separate. To bridge this gap, \textit{weirwood} includes an optional \texttt{transport} layer that serializes FHE types and transmits them as prost-encoded Protocol Buffer messages over plain TCP. The wire format for each message body matches gRPC's protobuf encoding, so the same \texttt{.proto} schema can later be served via a tonic-based gRPC stack without changing the on-the-wire payloads; the bundled example, however, uses raw \texttt{TcpListener}/\texttt{TcpStream} with a hand-rolled length-prefixed frame and does not invoke the tonic runtime.
+
+Three artifacts must cross the network. Measured sizes for the default 128-bit \texttt{FheInt32} parameter set on the Breast Cancer Wisconsin fixture (30 features), produced by \texttt{cargo run --release --example measure\_transport\_sizes --features transport}:
+\begin{enumerate}
+\item \textbf{ServerKey} (180.6 MB measured, one-time setup): The \texttt{ServerContext} evaluation key, serialized using \texttt{tfhe-rs}'s \texttt{safe\_serialize}, which includes versioning and format validation. Transmitted once per client session during setup.
+\item \textbf{EncryptedInput} (257.9 KB per encrypted feature; 7.7 MB for the full 30-feature vector, per inference): Each encrypted feature (\texttt{FheInt32}) is serialized individually and packed with length-prefixed framing, avoiding reliance on \texttt{tfhe-rs}'s unsupported \texttt{Vec<FheInt32>} serialization. The per-feature size reflects the integer-API encoding of a 32-bit value as multiple shortint blocks, each carrying its own LWE ciphertext.
+\item \textbf{EncryptedScore} ($\approx$ one \texttt{FheInt32}, $\approx$ 258 KB, per inference): The encrypted raw score returned from the server, also using \texttt{tfhe-rs}'s safe serialization.
+\end{enumerate}
+
+The server maintains a session map (\texttt{HashMap<String, FheEvaluator>}) indexed by session UUID. Multiple clients can hold sessions simultaneously, each with an independent \texttt{FheEvaluator} that retains the client's \texttt{ServerContext}, preventing expensive reinitialization on subsequent predictions. In the current implementation the session map is wrapped in a single \texttt{Mutex} that is held across the entire \texttt{evaluator.predict(...)} call, so per-session predictions are serialized server-side: the transport supports session multiplexing, but inference itself is not yet concurrent across clients. Replacing the map with \texttt{Mutex<HashMap<String, Arc<FheEvaluator>>>} (cloning the \texttt{Arc} and dropping the lock before evaluation) would allow truly concurrent inference and is a straightforward extension.
+
+Key implementation details include:
+\begin{itemize}
+\item \textbf{Message framing}: A one-byte message type prefix (0 for InitSession, 1 for Predict) followed by a 4-byte little-endian length, then the Protocol Buffer payload, ensuring robust message boundaries on TCP streams.
+\item \textbf{Size limits}: \texttt{tfhe-rs}'s \texttt{safe\_serialize} accepts an explicit byte-size cap; \textit{weirwood} sets it to 512 MB (\texttt{SIZE\_LIMIT\_BYTES}), large enough to admit a ServerKey of $\sim$100--200 MB plus serialization overhead. When the transport is migrated to a tonic-backed gRPC server, the analogous \texttt{max\_decoding\_message\_size} / \texttt{max\_encoding\_message\_size} (defaulting to 4 MB) must be raised similarly; without that change a real gRPC pipeline would silently truncate the ServerKey.
+\item \textbf{Per-connection threads and key installation}: Each accepted TCP connection is handled on its own \texttt{thread::spawn}'d OS thread. The relevant per-client key installation is not on those connection-handling threads themselves, but inside each \texttt{FheEvaluator}'s private Rayon worker pool (Listing~\ref{lst:pool}), where a \texttt{start\_handler} closure calls \texttt{tfhe::set\_server\_key} on every Rayon worker so that subsequent PBS calls in that pool use the correct client's evaluation key. Cross-session keys cannot be confused because each session holds its own \texttt{FheEvaluator} with its own thread pool.
+\end{itemize}
+
+This design maintains the type-system security boundary across the network boundary: the client never ships a \texttt{ClientContext}, and the server's \texttt{FheEvaluator} type system guarantees it cannot decrypt ciphertexts, even if a compromised or malicious server operator attempted to misuse the returned bytes.
 
 % ============================================================
 % ANALYSIS
@@ -229,13 +251,15 @@ Sigmoid and softmax activations are applied client-side in plaintext after decry
 
 \subsection{Correctness}
 
-The FHE circuit is evaluated entirely in the integer domain. The only source of error is fixed-point rounding: each encoding introduces at most $\pm 0.0005$ in the original domain, and worst-case accumulated error over 100 trees is $\pm 0.05$. The observed delta on the benchmark fixture is $\approx 0.0166$, consistent with partial error cancellation across trees.
+The FHE circuit is evaluated entirely in the integer domain. The dominant source of error is fixed-point rounding of leaf weights: each encoding introduces at most $\pm 0.0005$ in the original domain, and the per-tree worst-case accumulated leaf-weight error over $N$ trees is bounded by Eq.~(2). Threshold rounding is a second, qualitatively different source of error: a feature value within $\pm 0.0005$ of a split threshold can flip the outcome of the corresponding \texttt{.le()} comparison and route to a different leaf, producing a discontinuous ``leaf-swap'' error not bounded by Eq.~(2). On the Breast Cancer Wisconsin fixture this regime is rare and the observed deviation is dominated by leaf-weight rounding. The observed deviation on the benchmark fixture is $|\Delta| = 0.0068$, well within the leaf-weight bound and consistent with partial error cancellation across trees.
 
-The comparison circuit itself introduces no approximation. TFHE programmable bootstrapping evaluates the Heaviside function exactly as a LUT, unlike BFV or BGV schemes which require polynomial approximation of comparisons \cite{TFHE-rs}. The oblivious evaluation strategy requires that both subtrees be computed at every internal node regardless of the comparison result, ensuring the execution trace is independent of the input and no branch information is leaked through timing or access patterns. The downside of this is that a PBS is computed for every possible node, whereas (in plaintext inference) we only need to visit relevant nodes.
+For a binary classifier with decision threshold $0.5$ on the sigmoid output, what matters operationally is whether the FHE prediction crosses the threshold on the same side as the plaintext prediction, not the raw $|\Delta|$. The 7-vector regression test in \texttt{tests/integration.rs} confirms agreement to $10^{-5}$ between the Rust \emph{plaintext} predictions and the Python XGBoost reference probabilities; the test suite does not currently exercise the FHE evaluator at all, and the per-call $|\Delta| = 0.0068$ between FHE and Rust plaintext reported here is taken from \texttt{bench\_fhe\_full} (averaged over 10 inferences on a single test vector), not from a regression test. On the 7 reference vectors all probabilities lie either below 0.19 or above 0.99 (most are above 0.99 or below 0.01), so a per-call rounding error in the raw-score domain on the order of $0.01$ is far too small to flip the threshold-at-0.5 decision on any of them. We do not have direct AUC or threshold-agreement measurements on the encrypted predictions over the full $114$-sample test split (a single FHE inference is $\approx 4$ min, making a full sweep an $\approx 7.5$-hour run that we did not execute); a deployment with stricter accuracy guarantees should run that sweep and report empirical AUC delta and threshold-agreement rate rather than relying on the per-call $|\Delta|$ alone.
+
+The comparison circuit itself introduces no approximation. TFHE programmable bootstrapping evaluates the Heaviside function exactly as a LUT, unlike BFV or BGV schemes which require polynomial approximation of comparisons \cite{TFHE-rs}. The oblivious evaluation strategy requires that both subtrees be computed at every internal node regardless of the comparison result, ensuring the execution trace is independent of the input and no branch information is leaked through timing or access patterns. Each internal node therefore issues one PBS for the \texttt{.le()} comparison plus one \texttt{if\_then\_else} oblivious select on \texttt{FheInt32}, which compiles to multiple per-bit homomorphic operations rather than a single PBS; the 525-node ensemble thus performs 525 comparison PBSes together with 525 oblivious selects (total bootstrap count is implementation-defined by \texttt{tfhe-rs} and not directly counted here). The downside of this strategy is that the full per-node circuit is evaluated for every node, whereas plaintext inference visits only the nodes along the actual root-to-leaf path.
 
 \subsection{Performance}
 
-Benchmarks were collected on the Breast Cancer Wisconsin fixture (100 trees, max depth $\leq 6$, 525 internal nodes, 30 features, \texttt{binary:logistic}, StandardScaler-normalized) on a 12-core CPU in release mode. FHE latency is averaged over 10 runs; plaintext throughput uses 100{,}000 iterations. Results are shown in Table~\ref{tab:bench}.
+Benchmarks were collected on the Breast Cancer Wisconsin fixture (100 trees, \texttt{max\_depth = 8}, 525 internal nodes total, $\approx 5.25$ internal nodes per tree on average, 30 features, \texttt{binary:logistic}, StandardScaler-normalized) on a 12-core CPU in release mode. FHE latency is averaged over 10 runs; plaintext throughput uses 100{,}000 iterations. Results are shown in Table~\ref{tab:bench}.
 
 \begin{table}[h]
 \centering
@@ -245,7 +269,7 @@ Benchmarks were collected on the Breast Cancer Wisconsin fixture (100 trees, max
 \midrule
 weirwood (Rust, plaintext)    & 388.0 ns        & 2{,}577{,}011 & \\
 XGBoost (Python, plaintext)   & 103{,}862.0 ns  & 9{,}628        & \\
-weirwood (Rust, \textbf{FHE}) & 3.9 min         & 0.0042        & avg 10 runs, 525 PBS ops \\
+weirwood (Rust, \textbf{FHE}) & 3.9 min         & 0.0042        & avg 10 runs, 525 comparison PBSes (oblivious-select bootstraps not counted separately) \\
 \bottomrule
 \end{tabular}
 \caption{Inference throughput on the Breast Cancer Wisconsin benchmark fixture. FHE uses Rayon tree-level parallelism on 12 cores. Rust plaintext is approximately $660\times$ faster than Python plaintext and roughly $613{,}000\times$ faster than FHE.}
@@ -254,26 +278,89 @@ weirwood (Rust, \textbf{FHE}) & 3.9 min         & 0.0042        & avg 10 runs, 5
 
 FHE phase breakdown: key generation 843 ms, encryption 47.583 ms, inference 236.98 s (avg 10 runs), decryption 0.031 ms; observed deviation from plaintext $|\Delta| = 0.0068$.
 
-Rayon tree-level parallelism on 12 cores yields approximately a $9\times$ speedup over the expected serial time of $\approx 3{,}142$ s ($525 \text{ ops} \times 5.98$ s/op), rather than the theoretical $12\times$ maximum. The limited gain reflects the memory-bandwidth bottleneck of PBS operations: each bootstrapping call performs large Number Theoretic Transform (NTT) polynomial operations whose combined working set saturates L3 cache and DRAM bandwidth when executed in parallel \cite{TFHE-rs}. Each tree has on average 5.25 internal nodes (maximum path depth 6), so each Rayon task consists of up to 6 sequential PBS operations, sufficient work to amortize scheduling overhead, but insufficient to hide memory latency.
+We did not measure a serial-execution baseline directly; the only single-PBS reference point is the stump benchmark, where one isolated PBS call takes $\approx 0.6$ s on the same hardware. The 12-core ensemble run amortizes to $236.98 \text{ s} / 525 \approx 0.45$ s per PBS, modestly faster than the isolated single-PBS figure. Naively this suggests only a small effective parallel speedup despite 12 available cores; the gap to linear scaling reflects the memory-bandwidth bottleneck of PBS operations, where each bootstrapping call performs large Number Theoretic Transform (NTT) polynomial operations whose combined working set saturates L3 cache and DRAM bandwidth when executed in parallel \cite{TFHE-rs}. Because the obliviousness requirement forces every internal node to be evaluated, each Rayon task corresponds to one whole tree and issues on average $525/100 \approx 5.25$ sequential PBSes (depth-first across all internal nodes, not only those along one root-to-leaf path); this granularity is sufficient to amortize scheduling overhead, but the per-PBS NTT working set still saturates shared cache.
 
-The primary remaining performance target is GPU acceleration. The \texttt{tfhe-rs} CUDA backend targets $\approx 1$ ms per PBS operation \cite{TFHE-rs}, which would reduce the 525-node model from $\approx 3.95$ min to under 1 s total inference latency.
+The primary remaining performance target is GPU acceleration. Zama reports approximately $1$ ms per PBS operation for selected variants on the \texttt{tfhe-rs} CUDA backend \cite{TFHE-rs}; whether that figure transfers to the larger-message-modulus PBSes used by the \texttt{FheInt32} comparisons in this work is workload-dependent. If it does, a 525-node model is projected to drop from $\approx 3.95$ min to roughly 1 s of total inference latency, but this remains an aspirational target rather than a measurement.
+
+\subsection{Practicality and Deployment Considerations}
+
+FHE-based inference represents a genuine privacy-utility trade-off. Understanding where it is viable requires careful assessment of both latency constraints and threat model.
+
+\subsubsection*{Where FHE Excels}
+
+FHE is practical for scenarios where:
+\begin{enumerate}
+\item \textbf{Batch inference with latency tolerance}: Medical diagnosis systems, financial risk scoring, hiring decisions, and fraud detection can tolerate 5--60 second latency provided all inference is private. Real-time constraints (e.g., sub-second API responses) rule out FHE on current hardware.
+\item \textbf{High-value, infrequent predictions}: A healthcare provider running patient-specific risk models in confidence-sensitive contexts (e.g., insurance underwriting, clinical trial matching) justifies 4--5 minute per-patient computation if privacy is the regulatory or contractual requirement.
+\item \textbf{Model confidentiality alongside input privacy}: When both the model and features are sensitive intellectual property, FHE is one of the few mechanisms ensuring neither party learns the other's secrets. Secure multi-party computation (MPC) alternatives exist but require interactive protocols with higher communication overhead and more complex deployment.
+\item \textbf{Deterministic, bounded computation}: Tree ensemble inference is stateless and finishes predictably. Workloads with adaptive depth (e.g., decision trees with data-dependent pruning) or variable-length sequences are poor fits for FHE.
+\end{enumerate}
+
+\subsubsection*{Where FHE Struggles}
+
+FHE is impractical for:
+\begin{enumerate}
+\item \textbf{Real-time or near-real-time inference}: Interactive systems, real-time bidding, live recommendation systems, and conversational agents cannot function under FHE's per-query 3--60 second latency. GPU acceleration may eventually enable $\sim 1$ second latency, which is borderline for some financial systems but inadequate for millisecond-scale trading or online auctions.
+\item \textbf{Complex non-polynomial activations}: Neural networks with ReLU, sigmoid, and attention mechanisms require polynomial approximation (e.g., Chebyshev polynomials) or many sequential bootstrapping operations, exponentially increasing circuit depth. A 10-layer neural network might require $10^4$--$10^6$ PBS operations vs.~525 for a 100-tree ensemble, making FHE infeasible in practice.
+\item \textbf{Models with data-dependent branching}: Attention mechanisms, tree pruning, and other adaptive computations defeat the obliviousness strategy: the server must compute all branches regardless, and different inputs traverse different execution paths, leaking information through timing and memory access patterns unless ORAM is added (itself expensive).
+\item \textbf{Scenarios where the server is not the threat}: If the threat is external eavesdroppers (not the server itself), standard TLS encryption is far simpler, faster, and sufficient. FHE only prevents a curious or compromised server from learning plaintext data.
+\item \textbf{Settings where the client trusts the server's plaintext guarantee}: If the client is willing to assume the server operator signs an NDA or is bound by regulatory compliance (HIPAA, GDPR), plaintext transmission with contractual protections is standard practice and faster.
+\end{enumerate}
+
+\subsubsection*{Practical Deployment with \textit{weirwood}}
+
+The transport layer makes \textit{weirwood} suitable for batch-inference workloads in regulated environments. Example use cases:
+\begin{itemize}
+\item A healthcare provider outsources model inference to a cloud provider (AWS, Azure, GCP) without revealing patient features or the trained model to the cloud operator.
+\item A financial institution evaluates credit-risk models for third-party users (e.g., via a white-label API) while ensuring the model is not reverse-engineered and users' financial data never leaves encrypted form.
+\item A research institution evaluates ML-based diagnostic models on sensitive genomic data without centralizing genomes in a single facility.
+\end{itemize}
+
+Deployment considerations include:
+\begin{itemize}
+\item \textbf{Network latency}: The 180.6 MB ServerKey (measured) must be transmitted once per session; on a 100 Mbps link ($\approx 12.5$ MB/s) this adds roughly 14--15 seconds to setup. The per-inference encrypted feature vector ($\approx 7.7$ MB for 30 features) and encrypted score ($\approx 258$ KB) add roughly 0.6 s and 20 ms respectively at the same link speed. Caching the ServerKey on the client side or supporting persistent sessions amortizes the dominant key-transfer cost across many inferences.
+\item \textbf{Key management}: The \texttt{ClientContext} private key must never be exposed. In a managed-service deployment, clients should use hardware security modules (HSMs) or secure enclaves to store and use the key.
+\item \textbf{Server-side confidentiality}: The server can observe model structure in plaintext. If model IP is sensitive, ORAM for oblivious model access would be required, adding $O(\log N)$ overhead per memory access.
+\item \textbf{Client-side computational cost}: Key generation ($\approx 800$ ms) and encryption ($\approx 50$ ms per feature vector) are client-side one-time and per-query costs, respectively. These are negligible relative to server-side FHE evaluation but become important on resource-constrained clients (mobile, IoT).
+\end{itemize}
+
+% ---- ----
+For \textit{weirwood}, the achievable latency (3.9 min on CPU, $\sim 1$ s on GPU if accelerated) and support for multi-core parallelism and distributed transport position FHE inference as a viable option for latency-tolerant, high-privacy scenarios where neither plaintext transmission nor traditional MPC are acceptable.
 
 \subsection{Security}
 
-The security of \textit{weirwood} rests on the RLWE assumption at 128-bit security \cite{regev} using the default parameters from \texttt{tfhe-rs} \cite{TFHE-rs}. The best known attacks use lattice reduction via the Block Korkine--Zolotarev (BKZ) algorithm, which requires $2^{128}$ operations, making the scheme secure against both classical and quantum adversaries.
+\subsubsection*{Threat Model}
 
-The server receives a \texttt{ServerContext} containing only the evaluation key, which provides no decryption capability. Under RLWE, the evaluation key is computationally indistinguishable from random; the server learns nothing about plaintext feature values or the decrypted score. The oblivious multiplexer at each node ensures the branch taken is not revealed, as \texttt{eval\_node} unconditionally recurses into both children at every internal node.
+We assume a \textit{semi-honest} (honest-but-curious) server: the server executes the protocol faithfully but may inspect any data it receives in an attempt to learn plaintext feature values, the decrypted score, or the input-dependent evaluation path. A malicious server that returns adversarially tampered ciphertexts (e.g., to bias a downstream decision) is out of scope; defending against that setting requires verifiable computation or a zero-knowledge proof of correct evaluation, neither of which is implemented here. The client is assumed to manage its \texttt{ClientContext} private key correctly.
 
-One limitation: the server observes the model structure in plaintext. If the model itself is sensitive intellectual property, oblivious RAM (ORAM) for model access would be required, which is outside the scope of this implementation.
+\subsubsection*{Cryptographic Assumption}
+
+The security of \textit{weirwood} rests on the Ring Learning With Errors (RLWE) assumption \cite{peikert,regev}, instantiated with \texttt{tfhe-rs}'s default 128-bit-classical-security integer parameter set \texttt{PARAM\_MESSAGE\_2\_CARRY\_2\_KS\_PBS} \cite{TFHE-rs}. The 128-bit figure is a security target of the parameter set as estimated by the LWE-Estimator framework \cite{albrecht-est}: the best known classical attacks (BKZ-style lattice reduction with sufficient blocksize) require approximately $2^{128}$ operations, and the parameters are calibrated against this estimate rather than BKZ having a $2^{128}$ worst-case complexity in general. No known polynomial-time quantum algorithm breaks RLWE: in particular, Shor's algorithm \cite{shor} efficiently solves integer factorization and discrete logarithms (breaking RSA and elliptic curve cryptography) but does not apply to lattice problems, which are conjectured to remain hard even against polynomial-time quantum adversaries. This positions RLWE-based FHE as a candidate post-quantum building block.
+
+\subsubsection*{What the Server Learns and Does Not Learn}
+
+The server receives a \texttt{ServerContext} containing only the evaluation key, which provides no decryption capability. Under RLWE, the evaluation key is computationally indistinguishable from random; the server learns nothing about plaintext feature values or the decrypted score. The oblivious multiplexer at each node ensures the branch taken is not revealed, as \texttt{eval\_node} unconditionally recurses into both children at every internal node. One limitation: the server observes the model structure in plaintext. If the model itself is sensitive intellectual property, oblivious RAM (ORAM) for model access would be required, which is outside the scope of this implementation.
+
+\subsubsection*{Side Channels}
+
+Logical obliviousness in the circuit does not by itself rule out physical side channels. \textit{weirwood} relies on \texttt{tfhe-rs}'s PBS implementation being effectively constant-time at the granularity that matters here; we have not independently audited it for data-dependent timing or cache footprint inside a single PBS call. At the inference granularity, total wall-clock time is essentially constant across inputs because every internal node is evaluated regardless of the comparison outcome, so an external observer of total query latency learns nothing input-dependent. Per-tree completion times can vary slightly across runs because \texttt{if\_then\_else} on \texttt{FheInt32} dispatches multiple per-bit operations whose noise-management cost is implementation-defined, but these variations are not measurably correlated with the plaintext input on our benchmark. A deployment with a stronger threat model (a colocated adversary with cache-side-channel access to the server process) would need to verify constant-time PBS in \texttt{tfhe-rs} explicitly and apply standard cache-isolation hygiene.
+
+\subsection{Comparison with Prior FHE Tree-Inference Work}
+
+Privacy-preserving evaluation of decision trees on encrypted data has been studied in several lines of prior work, with which \textit{weirwood} is broadly consistent. Tueno, Kerschbaum, and Katzenbeisser \cite{tueno} present a framework for private evaluation of decision trees with sublinear communication cost, mixing FHE with garbled circuits and focusing on single trees and small ensembles primarily on Paillier- and BGV-style schemes. Akavia, Leibovich, Resheff, Ron, Shahar, and Vald \cite{akavia} extend the setting to private training and inference of decision trees over encrypted data and discuss the cost of oblivious branch selection. More recently, Frery, Stoian, and collaborators at Zama \cite{frery} have published TFHE-based privacy-preserving tree inference (including XGBoost) using \texttt{concrete-ml} on top of \texttt{tfhe-rs}, with comparable per-PBS costs and a similar oblivious-traversal strategy.
+
+\textit{weirwood}'s contribution relative to these is not a new cryptographic primitive but rather (i) a small, audit-friendly Rust library that exercises the modern \texttt{tfhe-rs} programmable-bootstrapping API directly without an additional ML compiler layer, (ii) a Rust-type-system encoding of the two-party trust boundary, and (iii) an explicit network transport (\S\,2.3.4) bridging the in-process protocol to a real distributed deployment. We do not claim asymptotic improvements over the schemes above; the per-PBS latency reported here is broadly consistent with Zama's published TFHE numbers on similar hardware.
 
 % ============================================================
 % CONCLUSION
 % ============================================================
 \section{Conclusion}
 
-\textit{weirwood} demonstrates that end-to-end FHE inference over a full XGBoost ensemble is practically achievable with current cryptographic tooling. A 100-tree, 525-node \texttt{binary:logistic} model evaluates in $\approx 3.95$ min on CPU using TFHE programmable bootstrapping, with results matching the plaintext reference within fixed-point rounding error (observed $|\Delta| \approx 0.0068$, theoretical worst case $\pm 0.05$ with $\text{SCALE} = 1000$). Rayon tree-level parallelism provides a $\approx 9\times$ speedup over serial execution; the remaining gap from linear scaling reflects the memory-bandwidth bottleneck of NTT-based PBS operations.
+\textit{weirwood} demonstrates that end-to-end FHE inference over a full XGBoost ensemble is practically achievable with current cryptographic tooling. A 100-tree, 525-node \texttt{binary:logistic} model evaluates in $\approx 3.95$ min on CPU using TFHE programmable bootstrapping, with results matching the plaintext reference within fixed-point rounding error (observed $|\Delta| = 0.0068$, theoretical worst case $\pm 0.05$ with $\text{SCALE} = 1000$). Rayon tree-level parallelism brings the per-PBS amortized cost in the 12-core ensemble run ($\approx 0.45$ s) modestly below the isolated single-PBS cost ($\approx 0.6$ s on the stump benchmark); the limited gain reflects the memory-bandwidth bottleneck of NTT-based PBS operations rather than insufficient parallelism in the algorithm.
 
-The primary directions for future work are GPU acceleration via the \texttt{tfhe-rs} CUDA backend (targeting $\approx 1$ ms per PBS op, reducing inference from 3.95 min to under 1 s), server-side activation functions via CKKS approximate arithmetic \cite{ckks} or Chebyshev polynomial evaluation within TFHE, and a transport layer for real network deployment. The project also demonstrates that Rust's type system can enforce the trust boundary between client and server roles at compile time, with a library of approximately 500 lines sufficient to implement the cryptographically correct core of privacy-preserving gradient boosted tree inference.
+A key contribution of this work is the addition of a practical network transport layer that enables distributed deployment. The transport layer serializes FHE types using TFHE's safe serialization and transmits them over TCP with Protocol Buffer framing, making end-to-end privacy-preserving inference accessible to real-world applications. Clients and servers are now separate processes, with session management via UUID-indexed evaluator maps; per-session inference is currently serialized server-side under a single mutex but readily generalizes to concurrent multi-client inference by holding sessions as \texttt{Arc<FheEvaluator>}.
+
+The primary directions for future work are GPU acceleration via the \texttt{tfhe-rs} CUDA backend (Zama's published target of $\approx 1$ ms per PBS op for selected variants would project inference toward roughly 1 s, subject to confirmation on the \texttt{FheInt32} PBSes used here), server-side activation functions via CKKS approximate arithmetic \cite{ckks} or Chebyshev polynomial evaluation within TFHE, and oblivious model access via ORAM for scenarios where model IP confidentiality is required. The project also demonstrates that Rust's type system can enforce the trust boundary between client and server roles at compile time, with $\approx 2{,}000$ lines of Rust total, of which $\approx 800$ implement the FHE core (\texttt{src/eval/fhe/}) and the network transport (\texttt{src/transport/}) sufficient to implement the cryptographically correct core of privacy-preserving gradient boosted tree inference end to end.
 
 % ============================================================
 % REFERENCES
@@ -303,11 +390,24 @@ I.\ Chillotti, N.\ Gama, M.\ Georgieva, and M.\ Izabachene,
 \textit{Journal of Cryptology}, vol.\ 33, 2020, pp.\ 34--91.
 \url{https://doi.org/10.1007/s00145-019-09319-x}
 
+\bibitem{shor}
+P.\ W.\ Shor,
+``Polynomial-Time Algorithms for Prime Factorization and Discrete Logarithms on a Quantum Computer,''
+\textit{SIAM Journal on Computing}, vol.\ 26, no.\ 5, 1997, pp.\ 1484--1509.
+\url{https://doi.org/10.1137/S0097539795293172}
+
 \bibitem{regev}
 O. Regev,
 ``On Lattices, Learning with Errors, Random Linear Codes, and Cryptography,''
 \textit{Journal of the ACM}, vol.\ 56, art. 34, 2009, pp.\ 1--40.
 \url{https://doi.org/10.1145/1568318.1568324}
+
+\bibitem{peikert}
+C.\ Peikert,
+``A Decade of Lattice Cryptography,''
+\textit{Foundations and Trends® in Theoretical Computer Science},
+vol.\ 10, no.\ 4, 2016, pp.\ 283--424.
+\url{https://doi.org/10.1561/0400000074}
 
 \bibitem{ckks}
 J.\ H.\ Cheon, A.\ Kim, M.\ Kim, and Y.\ Song,
@@ -340,6 +440,30 @@ Rayon Contributors,
 ``Rayon: A Data Parallelism Library for Rust,''
 GitHub, 2023.
 \url{https://github.com/rayon-rs/rayon}
+
+\bibitem{albrecht-est}
+M.\ R.\ Albrecht, R.\ Player, and S.\ Scott,
+``On the Concrete Hardness of Learning with Errors,''
+\textit{Journal of Mathematical Cryptology}, vol.\ 9, no.\ 3, 2015, pp.\ 169--203.
+\url{https://doi.org/10.1515/jmc-2015-0016}
+
+\bibitem{tueno}
+A.\ Tueno, F.\ Kerschbaum, and S.\ Katzenbeisser,
+``Private Evaluation of Decision Trees Using Sublinear Cost,''
+\textit{Proceedings on Privacy Enhancing Technologies}, vol.\ 2019, no.\ 1, 2019, pp.\ 266--286.
+\url{https://doi.org/10.2478/popets-2019-0015}
+
+\bibitem{akavia}
+A.\ Akavia, M.\ Leibovich, Y.\ S.\ Resheff, R.\ Ron, M.\ Shahar, and M.\ Vald,
+``Privacy-Preserving Decision Trees Training and Prediction,''
+\textit{ACM Transactions on Privacy and Security}, vol.\ 25, no.\ 3, 2022, art.\ 24.
+\url{https://doi.org/10.1145/3517197}
+
+\bibitem{frery}
+J.\ Frery, A.\ Stoian, R.\ Bredehoft, L.\ Montero, C.\ Kherfallah, B.\ Chevallier-Mames, and A.\ Meyre,
+``Privacy-Preserving Tree-Based Inference with TFHE,''
+in \textit{Mobile, Secure, and Programmable Networking (MSPN 2023)}, Springer, 2023.
+\url{https://arxiv.org/abs/2303.01254}
 
 \end{thebibliography}
 

@@ -19,6 +19,9 @@ pub mod eval;
 pub mod model;
 pub(crate) mod ubj;
 
+#[cfg(feature = "transport")]
+pub mod transport;
+
 /// Re-exported from [`eval::fhe`] for convenience.
 pub use eval::fhe;
 

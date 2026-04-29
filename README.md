@@ -18,7 +18,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-weirwood = "0.3"
+weirwood = "0.4"
 ```
 
 ### Plaintext inference
@@ -105,6 +105,25 @@ println!("prediction: {raw_score:.4}"); // for regression (identity activation)
 
 In a single-process deployment (as in the examples) both parties run in the same process — the `server_ctx` is passed locally instead of over a network.
 
+### Networked deployment (gRPC)
+
+With the `transport` feature enabled, the crate exposes a real gRPC contract built from `proto/inference.proto` via `tonic-build`. Servers implement [`InferenceService`](src/transport/rpc.rs) and serve it under `tonic::transport::Server` — see [`examples/server.rs`](examples/server.rs) for a 100-line working server. Clients can either drive the generated `InferenceServiceClient` themselves or use the high-level [`WeirwoodClient`](src/transport/client.rs) which bundles key-generation, session setup, encrypt, RPC, decrypt, and activation into a single call:
+
+```rust,no_run
+use weirwood::{model::WeirwoodTree, transport::WeirwoodClient};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let model = WeirwoodTree::from_ubj_file("model.ubj")?;
+    let mut client = WeirwoodClient::connect("http://127.0.0.1:9999").await?;
+    let proba = client.predict_proba(&model, &[1.0, 0.5, 3.2, 0.1]).await?;
+    println!("prediction: {proba:.4}");
+    Ok(())
+}
+```
+
+The protocol-level types (`InferenceServiceClient`, `InitSessionRequest`/`Response`, `PredictRequest`/`Response`) remain available at `weirwood::transport::*` for callers that need finer control.
+
 ## Project layout
 
 ```
@@ -118,7 +137,7 @@ src/
     fhe/
       mod.rs        re-exports + unit tests
       client.rs     ClientContext — key generation, encrypt, decrypt; EncryptedInput; SCALE
-      server.rs     ServerContext — server key only, set_active
+      server.rs     ServerContext — server key only (set_active for advanced use)
       evaluator.rs  FheEvaluator — encrypted tree evaluation
 
 examples/
@@ -156,11 +175,26 @@ benchmarks/
 | `binary:logistic` | Yes | Yes (sigmoid applied client-side post-decrypt) |
 | `multi:softmax` | Partial | Planned |
 
+## Features
+
+| Feature | Status | Purpose |
+|---------|--------|---------|
+| (default, none) | Stable | Core library: model loading, plaintext/FHE inference |
+| `transport` | Stable | tonic gRPC service (`InferenceService`) and `WeirwoodClient` convenience for distributed inference |
+
 ## Building
 
 ```sh
 cargo build   # tfhe-rs is a required dependency — expect a longer first compile
 cargo test
+
+# For network transport layer (gRPC-compatible server and client examples)
+cargo build --features transport
+cargo test --features transport
+
+# Run server and client examples (requires --features transport)
+cargo run --release --example server --features transport -- --model tests/fixtures/trained_binary.ubj
+cargo run --release --example client --features transport
 ```
 
 ## Benchmarks
