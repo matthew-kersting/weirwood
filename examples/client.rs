@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("Connecting to {server_addr} (this includes ~1-3 s of FHE keygen)…");
     let mut client = WeirwoodClient::connect(server_addr).await?;
-    println!("Session {} established.", client.session_id());
+    println!("Session established.");
 
     let make_features = |first_val: f32| -> Vec<f32> {
         let mut v = vec![first_val];
