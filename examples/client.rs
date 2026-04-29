@@ -25,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("Loading model from {DEFAULT_MODEL}…");
-    let model = WeirwoodTree::from_ubj_file(DEFAULT_MODEL)?;
+    let model = WeirwoodTree::from_file(DEFAULT_MODEL)?;
     println!(
         "Model loaded: {} trees, {} features, objective: {:?}",
         model.trees.len(),

@@ -22,11 +22,7 @@ fn main() -> Result<(), weirwood::Error> {
     }
 
     let model_path: &String = &cli_args[1];
-    let weirwood_tree: WeirwoodTree = if model_path.ends_with(".ubj") {
-        WeirwoodTree::from_ubj_file(model_path)?
-    } else {
-        WeirwoodTree::from_json_file(model_path)?
-    };
+    let weirwood_tree: WeirwoodTree = WeirwoodTree::from_file(model_path)?;
 
     println!(
         "Loaded: {} trees, {} features, objective {:?}",

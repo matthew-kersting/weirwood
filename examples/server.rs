@@ -25,15 +25,10 @@ use weirwood::{
     model::WeirwoodTree,
     transport::{
         InferenceService, InferenceServiceServer, InitSessionRequest, InitSessionResponse,
-        PredictRequest, PredictResponse, deserialize_feature, deserialize_server_context,
-        serialize_score,
+        MAX_GRPC_MESSAGE_BYTES, PredictRequest, PredictResponse, deserialize_feature,
+        deserialize_server_context, serialize_score,
     },
 };
-
-/// Generous upper bound on a serialized `ServerKey` (~180 MB for the default
-/// `tfhe-rs 1.6` parameter set, plus headroom). Mirrors the limit applied on
-/// the client side.
-const MAX_GRPC_MESSAGE_BYTES: usize = 512 * 1024 * 1024;
 
 type SessionMap = Arc<Mutex<HashMap<String, FheEvaluator>>>;
 
@@ -140,11 +135,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("Loading model from {model_path}…");
-    let model = if model_path.ends_with(".ubj") {
-        WeirwoodTree::from_ubj_file(&model_path)?
-    } else {
-        WeirwoodTree::from_json_file(&model_path)?
-    };
+    let model = WeirwoodTree::from_file(&model_path)?;
     let warnings = model.validate_for_fhe();
     for w in &warnings {
         eprintln!("warning: {w}");

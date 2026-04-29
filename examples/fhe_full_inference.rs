@@ -71,18 +71,14 @@ fn main() -> Result<(), weirwood::Error> {
         .map(|s| s.parse::<f32>().expect("feature values must be f32"))
         .collect();
 
-    let model = if model_path.ends_with(".ubj") {
-        WeirwoodTree::from_ubj_file(&model_path)?
-    } else {
-        WeirwoodTree::from_json_file(&model_path)?
-    };
+    let model = WeirwoodTree::from_file(&model_path)?;
 
     println!("weirwood · full FHE XGBoost inference");
     println!("  model     : {model_path}");
     println!(
         "  trees     : {}   depth ≤ {}   features : {}",
         model.trees.len(),
-        max_depth(&model),
+        model.max_depth(),
         model.num_features,
     );
     println!("  objective : {:?}", model.objective);
@@ -179,25 +175,4 @@ fn main() -> Result<(), weirwood::Error> {
     println!();
     println!("Note: sigmoid / activation applied client-side on decrypted raw score.");
     Ok(())
-}
-
-/// Return the maximum depth of any tree in the ensemble (depth of a stump = 1).
-fn max_depth(model: &WeirwoodTree) -> usize {
-    model
-        .trees
-        .iter()
-        .map(|tree| tree_depth(tree, 0, 0))
-        .max()
-        .unwrap_or(0)
-}
-
-fn tree_depth(tree: &weirwood::model::Tree, node_idx: usize, depth: usize) -> usize {
-    let node = &tree.nodes[node_idx];
-    if node.is_leaf() {
-        depth
-    } else {
-        let left = tree_depth(tree, node.left_child as usize, depth + 1);
-        let right = tree_depth(tree, node.right_child as usize, depth + 1);
-        left.max(right)
-    }
 }
