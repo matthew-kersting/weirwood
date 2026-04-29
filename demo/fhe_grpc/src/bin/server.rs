@@ -54,10 +54,7 @@ impl InferenceService for InferenceServer {
         let id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
         self.sessions.lock().unwrap().insert(id, evaluator);
 
-        println!(
-            "[init] session {id} ({} MB server key)",
-            req.server_key.len() / 1_000_000
-        );
+        println!("[init] session initialized");
         Ok(Response::new(InitSessionResponse {
             session_id: id.to_string(),
             model_info: Some(self.info.clone()),
@@ -81,10 +78,7 @@ impl InferenceService for InferenceServer {
             .collect::<Result<_, _>>()
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-        println!(
-            "[predict] session {id}, {} features (~4 min on CPU)…",
-            features.len()
-        );
+        println!("[predict] request received");
 
         let mut sessions = self.sessions.lock().unwrap();
         let evaluator = sessions
