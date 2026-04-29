@@ -3,52 +3,49 @@
 //!
 //!   1. Open a gRPC connection to a `weirwood` inference server.
 //!   2. Generate a fresh FHE keypair locally.
-//!   3. Upload the [`ServerKey`] via `InitSession` and remember the session id.
-//!   4. On each [`predict_proba`] call: encrypt features → `Predict` RPC →
-//!      decrypt result → apply the model's activation function.
+//!   3. Upload the [`ServerKey`](tfhe::ServerKey) via `InitSession` and
+//!      remember the session id and the [`ModelInfo`](super::ModelInfo) the
+//!      server reports.
+//!   4. On each predict call: encrypt features → `Predict` RPC → decrypt
+//!      result → apply the model's activation function.
 //!
-//! The protocol-level types ([`InferenceServiceClient`], the `Predict` /
-//! `InitSession` request and response messages) remain available at
-//! `weirwood::transport::*` for callers that need finer control.
+//! Because the server reports the model's feature count and objective at
+//! session-init time, the client never has to load the XGBoost model itself.
 //!
-//! [`ServerKey`]: tfhe::ServerKey
-//! [`InferenceServiceClient`]: super::InferenceServiceClient
-//! [`predict_proba`]: WeirwoodClient::predict_proba
+//! The protocol-level types ([`InferenceServiceClient`](super::InferenceServiceClient),
+//! the `Predict` / `InitSession` request and response messages) remain
+//! available at `weirwood::transport::*` for callers that need finer control.
 
 use tonic::transport::Channel;
 use tonic::{Request, Status};
 
 use crate::Error;
-use crate::eval::PlaintextEvaluator;
 use crate::eval::fhe::ClientContext;
-use crate::model::{Objective, WeirwoodTree};
+use crate::eval::sigmoid;
+use crate::model::Objective;
 
 use super::rpc::inference_service_client::InferenceServiceClient;
 use super::rpc::{InitSessionRequest, PredictRequest};
-use super::{deserialize_score, serialize_feature, serialize_server_context};
-
-/// Generous upper bound on a serialized `ServerKey` (~180 MB for the default
-/// `tfhe-rs 1.6` parameter set, plus headroom for future parameter changes
-/// and protobuf overhead). Applied as `max_decoding_message_size` /
-/// `max_encoding_message_size` on both ends of the gRPC connection so the
-/// large `InitSession` payload isn't rejected by tonic's 4 MB default.
-const MAX_GRPC_MESSAGE_BYTES: usize = 512 * 1024 * 1024;
+use super::{
+    MAX_GRPC_MESSAGE_BYTES, deserialize_score, serialize_feature, serialize_server_context,
+};
 
 /// High-level FHE inference client.
 ///
 /// Holds a connected [`InferenceServiceClient`], a [`ClientContext`] (which
-/// owns the private key and never leaves the process), and an active
-/// `session_id` that ties subsequent `Predict` calls back to the uploaded
-/// server key on the remote.
+/// owns the private key and never leaves the process), the active
+/// `session_id`, and the model metadata the server reported at session
+/// setup.
 ///
-/// Created via [`WeirwoodClient::connect`]. Cheap to clone-via-Arc-on-Channel
-/// if you need fan-out, but the inner `ClientContext` is not `Clone`, so
-/// share via `Arc<WeirwoodClient>` if multiple tasks must encrypt against
-/// the same key.
+/// Created via [`WeirwoodClient::connect`]. The inner `ClientContext` is not
+/// `Clone`, so wrap in `Arc<Mutex<WeirwoodClient>>` if multiple tasks need
+/// to share the same key.
 pub struct WeirwoodClient {
     grpc: InferenceServiceClient<Channel>,
     fhe: ClientContext,
     session_id: String,
+    num_features: usize,
+    objective: Objective,
 }
 
 impl WeirwoodClient {
@@ -64,11 +61,11 @@ impl WeirwoodClient {
     /// reuse the same session.
     pub async fn connect(dst: impl Into<String>) -> Result<Self, Error> {
         let endpoint = tonic::transport::Endpoint::from_shared(dst.into())
-            .map_err(|e| Error::Other(format!("invalid server endpoint: {e}")))?;
+            .map_err(|e| Error::Transport(format!("invalid server endpoint: {e}")))?;
         let channel = endpoint
             .connect()
             .await
-            .map_err(|e| Error::Other(format!("failed to connect to inference server: {e}")))?;
+            .map_err(|e| Error::Transport(format!("failed to connect to inference server: {e}")))?;
 
         let mut grpc = InferenceServiceClient::new(channel)
             .max_decoding_message_size(MAX_GRPC_MESSAGE_BYTES)
@@ -86,61 +83,59 @@ impl WeirwoodClient {
             .map_err(status_to_error)?
             .into_inner();
 
+        let info = resp.model_info.ok_or_else(|| {
+            Error::Transport(
+                "InitSessionResponse missing model_info — server is too old or out of spec"
+                    .to_string(),
+            )
+        })?;
+        let objective = Objective::from_str(&info.objective_name, info.num_class as usize);
+
         Ok(Self {
             grpc,
             fhe,
             session_id: resp.session_id,
+            num_features: info.num_features as usize,
+            objective,
         })
     }
 
     /// Run a single inference end-to-end and return the activated probability
-    /// (or raw score for regression objectives).
+    /// (binary classification) or raw score (regression).
     ///
-    /// For `binary:logistic` the returned value is `sigmoid(raw_score)`; for
-    /// `reg:squarederror` it is the raw score; for `multi:softmax` this
-    /// method panics — use [`predict_multiclass_proba`](Self::predict_multiclass_proba)
-    /// instead.
-    pub async fn predict_proba(
-        &mut self,
-        model: &WeirwoodTree,
-        features: &[f32],
-    ) -> Result<f32, Error> {
+    /// `multi:softmax` is not supported here because the FHE evaluator
+    /// currently returns a single ensemble sum, not per-class scores; calling
+    /// this on a multi-class model returns `Err(Error::Format)`. Use
+    /// [`predict_raw`](Self::predict_raw) if you need to apply your own
+    /// activation.
+    pub async fn predict_proba(&mut self, features: &[f32]) -> Result<f32, Error> {
         let raw = self.predict_raw(features).await?;
-        Ok(match &model.objective {
-            Objective::BinaryLogistic => sigmoid(raw),
-            Objective::RegSquaredError => raw,
-            Objective::MultiSoftmax { num_class } => panic!(
-                "predict_proba returns a single f32; multi:softmax with num_class={} \
-                 produces a vector — use predict_multiclass_proba instead",
-                num_class
-            ),
-            Objective::Other(_) => raw,
-        })
-    }
-
-    /// Multi-class variant: returns one probability per class for a
-    /// `multi:softmax` / `multi:softprob` model.
-    ///
-    /// Panics if `model.objective` is not `MultiSoftmax`.
-    pub async fn predict_multiclass_proba(
-        &mut self,
-        model: &WeirwoodTree,
-        features: &[f32],
-    ) -> Result<Vec<f32>, Error> {
-        // The server returns the raw ensemble sum — for multi:softmax this is
-        // the per-class logits collapsed into one cipher- text by the FHE
-        // evaluator, which doesn't yet split per class. Until the FHE side
-        // can return per-class scores we fall back to the plaintext multi-
-        // class evaluator over the raw score; this assumes a single-class
-        // model encoded as multi-class. Revisit when the FHE evaluator gains
-        // a multi-output predict.
-        let _ = self.predict_raw(features).await?;
-        Ok(PlaintextEvaluator.predict_multiclass_proba(model, features))
+        match &self.objective {
+            Objective::BinaryLogistic => Ok(sigmoid(raw)),
+            Objective::RegSquaredError | Objective::Other(_) => Ok(raw),
+            Objective::MultiSoftmax { num_class } => Err(Error::Format(format!(
+                "WeirwoodClient::predict_proba does not support multi:softmax \
+                 (num_class={num_class}); the FHE evaluator returns a single \
+                 ensemble sum, not per-class scores"
+            ))),
+        }
     }
 
     /// Run inference and return the raw (pre-activation) decrypted score.
     /// Useful when the caller wants to apply its own activation.
+    ///
+    /// Returns `Err(Error::Format)` if `features.len()` doesn't match the
+    /// number of features the server reported at session setup, and
+    /// `Err(Error::Transport)` if the server returns an empty response.
     pub async fn predict_raw(&mut self, features: &[f32]) -> Result<f32, Error> {
+        if features.len() != self.num_features {
+            return Err(Error::Format(format!(
+                "model expects {} features, got {}",
+                self.num_features,
+                features.len()
+            )));
+        }
+
         let encrypted = self.fhe.encrypt(features);
         let mut feature_bytes = Vec::with_capacity(encrypted.len());
         for feat in &encrypted {
@@ -158,20 +153,30 @@ impl WeirwoodClient {
             .map_err(status_to_error)?
             .into_inner();
 
-        let encrypted_score = deserialize_score(&resp.encrypted_score)?;
+        let first = resp.encrypted_scores.first().ok_or_else(|| {
+            Error::Transport("server returned empty encrypted_scores".to_string())
+        })?;
+        let encrypted_score = deserialize_score(first)?;
         Ok(self.fhe.decrypt_score(&encrypted_score))
     }
 
-    /// Borrow the server-assigned session id (handy for logging).
+    /// Server-assigned session id (handy for logging).
     pub fn session_id(&self) -> &str {
         &self.session_id
+    }
+
+    /// Number of features the server's model expects per `Predict` call.
+    pub fn num_features(&self) -> usize {
+        self.num_features
+    }
+
+    /// Objective the server's model was trained for (drives the activation
+    /// applied by [`predict_proba`](Self::predict_proba)).
+    pub fn objective(&self) -> &Objective {
+        &self.objective
     }
 }
 
 fn status_to_error(status: Status) -> Error {
-    Error::Other(format!("gRPC error: {status}"))
-}
-
-fn sigmoid(x: f32) -> f32 {
-    1.0 / (1.0 + (-x).exp())
+    Error::Transport(format!("gRPC error: {status}"))
 }

@@ -13,48 +13,24 @@
 //!
 //! [`ServerKey`]: tfhe::ServerKey
 
-use tfhe::{ServerKey, set_server_key};
-
-// ---------------------------------------------------------------------------
-// ServerContext
-// ---------------------------------------------------------------------------
+use tfhe::ServerKey;
 
 /// Server-side FHE context — contains only the [`ServerKey`], no private key.
 ///
 /// Obtain a `ServerContext` from [`ClientContext::server_context`]; do not
-/// construct one directly.  Pass it to [`FheEvaluator::new`] to create an
-/// evaluator that can run inference on encrypted inputs.
+/// construct one directly. Pass it to [`FheEvaluator::try_new`] (or the
+/// unchecked [`FheEvaluator::new`]) to create an evaluator that can run
+/// inference on encrypted inputs.
 ///
 /// [`ClientContext::server_context`]: super::client::ClientContext::server_context
+/// [`FheEvaluator::try_new`]: super::evaluator::FheEvaluator::try_new
 /// [`FheEvaluator::new`]: super::evaluator::FheEvaluator::new
 pub struct ServerContext {
     pub(crate) server_key: ServerKey,
 }
 
 impl ServerContext {
-    /// Construct from an owned [`ServerKey`].
-    ///
-    /// This is `pub(crate)` — callers obtain a `ServerContext` via
-    /// [`ClientContext::server_context`], which enforces the key-separation
-    /// invariant.
-    ///
-    /// [`ClientContext::server_context`]: super::client::ClientContext::server_context
     pub(crate) fn from_key(server_key: ServerKey) -> Self {
         ServerContext { server_key }
-    }
-
-    /// Install the server key as the thread-local active key for TFHE-rs
-    /// operations on the calling thread.
-    ///
-    /// Most users do not need this — [`FheEvaluator`](super::evaluator::FheEvaluator)
-    /// installs the key on its worker threads at construction and lazily
-    /// installs it on the calling thread the first time `predict` runs there.
-    /// Use this only for advanced scenarios where you call TFHE-rs primitives
-    /// directly without going through an `FheEvaluator`.
-    ///
-    /// Each call clones the server key internally (unavoidable due to the
-    /// tfhe-rs API); avoid calling this in a hot loop.
-    pub fn set_active(&self) {
-        set_server_key(self.server_key.clone());
     }
 }

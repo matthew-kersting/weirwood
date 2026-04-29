@@ -71,18 +71,14 @@ fn main() -> Result<(), weirwood::Error> {
         .map(|s| s.parse::<f32>().expect("feature values must be f32"))
         .collect();
 
-    let model = if model_path.ends_with(".ubj") {
-        WeirwoodTree::from_ubj_file(&model_path)?
-    } else {
-        WeirwoodTree::from_json_file(&model_path)?
-    };
+    let model = WeirwoodTree::from_file(&model_path)?;
 
     println!("weirwood · full FHE XGBoost inference");
     println!("  model     : {model_path}");
     println!(
         "  trees     : {}   depth ≤ {}   features : {}",
         model.trees.len(),
-        max_depth(&model),
+        model.max_depth(),
         model.num_features,
     );
     println!("  objective : {:?}", model.objective);
@@ -105,9 +101,10 @@ fn main() -> Result<(), weirwood::Error> {
     // -----------------------------------------------------------------------
     // Server setup
     // -----------------------------------------------------------------------
-    // FheEvaluator::new installs the server key on its worker threads;
-    // predict() lazily installs it on the calling thread on first use.
-    let evaluator = FheEvaluator::new(server_ctx);
+    // try_new validates the model for FHE evaluation (rejects e.g. thresholds
+    // that overflow the fixed-point range) and installs the server key on
+    // worker threads. predict() lazily installs it on the calling thread.
+    let evaluator = FheEvaluator::try_new(&model, server_ctx)?;
 
     // -----------------------------------------------------------------------
     // Build test cases: CLI features (if any) + default probe vectors.
@@ -130,8 +127,8 @@ fn main() -> Result<(), weirwood::Error> {
     // For each test point: client encrypts → server evaluates → client decrypts
     // -----------------------------------------------------------------------
     println!(
-        "  {:<22}  {:<12}  {:<12}  {:<12}  {:<12}  {}",
-        "features", "plain_raw", "plain_proba", "fhe_raw", "fhe_proba", "FHE latency"
+        "  {:<22}  {:<12}  {:<12}  {:<12}  {:<12}  FHE latency",
+        "features", "plain_raw", "plain_proba", "fhe_raw", "fhe_proba"
     );
     println!("  {}", "-".repeat(88));
 
@@ -179,25 +176,4 @@ fn main() -> Result<(), weirwood::Error> {
     println!();
     println!("Note: sigmoid / activation applied client-side on decrypted raw score.");
     Ok(())
-}
-
-/// Return the maximum depth of any tree in the ensemble (depth of a stump = 1).
-fn max_depth(model: &WeirwoodTree) -> usize {
-    model
-        .trees
-        .iter()
-        .map(|tree| tree_depth(tree, 0, 0))
-        .max()
-        .unwrap_or(0)
-}
-
-fn tree_depth(tree: &weirwood::model::Tree, node_idx: usize, depth: usize) -> usize {
-    let node = &tree.nodes[node_idx];
-    if node.is_leaf() {
-        depth
-    } else {
-        let left = tree_depth(tree, node.left_child as usize, depth + 1);
-        let right = tree_depth(tree, node.right_child as usize, depth + 1);
-        left.max(right)
-    }
 }

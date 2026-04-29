@@ -19,23 +19,19 @@ fn main() -> Result<(), weirwood::Error> {
         .nth(1)
         .unwrap_or_else(|| "tests/fixtures/trained_binary.ubj".to_string());
 
-    let weirwood_tree: WeirwoodTree = if model_path.ends_with(".ubj") {
-        WeirwoodTree::from_ubj_file(&model_path)?
-    } else {
-        WeirwoodTree::from_json_file(&model_path)?
-    };
+    let weirwood_tree: WeirwoodTree = WeirwoodTree::from_file(&model_path)?;
 
     let features: Vec<f32> = vec![0.0; weirwood_tree.num_features];
     let evaluator: PlaintextEvaluator = PlaintextEvaluator;
 
     // Warm up instruction / branch-predictor caches.
     for _ in 0..WARMUP {
-        evaluator.predict_proba(&weirwood_tree, &features);
+        let _ = evaluator.predict_proba(&weirwood_tree, &features)?;
     }
 
     let start: Instant = Instant::now();
     for _ in 0..ITERATIONS {
-        evaluator.predict_proba(&weirwood_tree, &features);
+        let _ = evaluator.predict_proba(&weirwood_tree, &features)?;
     }
     let elapsed = start.elapsed();
 

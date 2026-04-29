@@ -35,11 +35,7 @@ fn main() -> Result<(), weirwood::Error> {
         .nth(1)
         .unwrap_or_else(|| DEFAULT_MODEL.to_string());
 
-    let model = if model_path.ends_with(".ubj") {
-        WeirwoodTree::from_ubj_file(&model_path)?
-    } else {
-        WeirwoodTree::from_json_file(&model_path)?
-    };
+    let model = WeirwoodTree::from_file(&model_path)?;
 
     // Count internal nodes across all trees (= number of PBS operations per inference).
     let total_internal_nodes: usize = model
@@ -55,7 +51,7 @@ fn main() -> Result<(), weirwood::Error> {
     println!(
         "  trees       : {}   depth ≤ {}   features : {}",
         model.trees.len(),
-        max_depth(&model),
+        model.max_depth(),
         model.num_features,
     );
     println!(
@@ -96,9 +92,9 @@ fn main() -> Result<(), weirwood::Error> {
     // -----------------------------------------------------------------------
     // Server setup
     // -----------------------------------------------------------------------
-    // FheEvaluator::new installs the server key on its worker threads;
-    // predict() lazily installs it on the calling thread on first use.
-    let fhe_eval = FheEvaluator::new(server_ctx);
+    // try_new validates the model for FHE evaluation and installs the server
+    // key on worker threads. predict() lazily installs it on the calling thread.
+    let fhe_eval = FheEvaluator::try_new(&model, server_ctx)?;
 
     // -----------------------------------------------------------------------
     // Client: encryption latency
@@ -170,24 +166,4 @@ fn main() -> Result<(), weirwood::Error> {
     println!("BENCH_PBS_OPS={total_internal_nodes}");
 
     Ok(())
-}
-
-fn max_depth(model: &WeirwoodTree) -> usize {
-    model
-        .trees
-        .iter()
-        .map(|tree| tree_depth(tree, 0, 0))
-        .max()
-        .unwrap_or(0)
-}
-
-fn tree_depth(tree: &weirwood::model::Tree, node_idx: usize, depth: usize) -> usize {
-    let node = &tree.nodes[node_idx];
-    if node.is_leaf() {
-        depth
-    } else {
-        let left = tree_depth(tree, node.left_child as usize, depth + 1);
-        let right = tree_depth(tree, node.right_child as usize, depth + 1);
-        left.max(right)
-    }
 }

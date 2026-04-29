@@ -49,6 +49,16 @@ use super::server::ServerContext;
 /// produces the correct result.
 pub const SCALE: f32 = 1000.0;
 
+/// Convert a plaintext `f32` to its fixed-point `i32` representation,
+/// saturating to the `i32` range. Used by feature encryption, leaf-value
+/// trivial encryption, and `base_score` encoding so the scale stays in lock-step
+/// across the encode/evaluate/decode pipeline.
+pub(crate) fn encode_fixed_point(value: f32) -> i32 {
+    (value * SCALE)
+        .round()
+        .clamp(i32::MIN as f32, i32::MAX as f32) as i32
+}
+
 /// An encrypted feature vector produced by [`ClientContext::encrypt`].
 ///
 /// Each element is an `FheInt32` representing one feature scaled by [`SCALE`].
@@ -83,14 +93,13 @@ pub type EncryptedScore = tfhe::FheInt32;
 /// let client = ClientContext::generate()?;
 /// let server_ctx = client.server_context(); // only the ServerKey is shared
 ///
-/// let model = WeirwoodTree::from_json_file("model.json")?;
-/// let features = vec![1.5_f32, 0.3, -2.1];
-/// let ciphertext = client.encrypt(&features);
+/// let model = WeirwoodTree::from_file("model.ubj")?;
+/// let ciphertext = client.encrypt(&[1.5_f32, 0.3, -2.1]);
 ///
 /// // --- "Send server_ctx and ciphertext to the server" ---
 ///
 /// // --- Server ---
-/// let evaluator = FheEvaluator::new(server_ctx); // installs key on worker threads
+/// let evaluator = FheEvaluator::try_new(&model, server_ctx)?;
 /// let encrypted_score = evaluator.predict(&model, &ciphertext);
 ///
 /// // --- "Send encrypted_score back to the client" ---
@@ -129,18 +138,15 @@ impl ClientContext {
 
     /// Encrypt a plaintext feature vector using the private key.
     ///
-    /// Each `f32` is multiplied by [`SCALE`], rounded, clamped to `i32`,
-    /// and then encrypted.  The resulting [`EncryptedInput`] can be sent to
-    /// the inference server alongside the [`ServerContext`].
+    /// Each `f32` is encoded via [`encode_fixed_point`] and then encrypted.
+    /// The resulting [`EncryptedInput`] can be sent to the inference server
+    /// alongside the [`ServerContext`].
     ///
     /// [`ServerContext`]: super::server::ServerContext
     pub fn encrypt(&self, features: &[f32]) -> EncryptedInput {
         features
             .iter()
-            .map(|&v| {
-                let scaled = (v * SCALE).round().clamp(i32::MIN as f32, i32::MAX as f32) as i32;
-                FheInt32::encrypt(scaled, &self.client_key)
-            })
+            .map(|&v| FheInt32::encrypt(encode_fixed_point(v), &self.client_key))
             .collect()
     }
 

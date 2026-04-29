@@ -34,6 +34,25 @@ message InitSessionRequest {
 message InitSessionResponse {
   // Server-assigned UUID for use in subsequent Predict calls.
   string session_id = 1;
+
+  // Metadata for the model the server has loaded for this session. The
+  // client uses this to validate feature shapes and pick an activation
+  // function — no need to ship the model to the client.
+  ModelInfo model_info = 2;
+}
+
+message ModelInfo {
+  // Number of features the model expects in each `Predict` call.
+  uint32 num_features = 1;
+
+  // Raw XGBoost objective string (e.g. "binary:logistic",
+  // "reg:squarederror", "multi:softmax", "multi:softprob"). Anything
+  // unrecognised is treated as identity activation by the convenience client.
+  string objective_name = 2;
+
+  // For `multi:softmax` / `multi:softprob` only — number of classes. Zero
+  // otherwise.
+  uint32 num_class = 3;
 }
 
 message PredictRequest {
@@ -45,8 +64,9 @@ message PredictRequest {
 }
 
 message PredictResponse {
-  // safe_serialize'd FheInt32 holding the raw pre-activation ensemble score.
-  // The client decrypts and applies the activation (sigmoid / softmax /
-  // identity) corresponding to its model's objective.
-  bytes encrypted_score = 1;
+  // One safe_serialize'd FheInt32 per output. For binary:logistic and
+  // reg:squarederror this carries a single element (the raw pre-activation
+  // ensemble score). The shape leaves room for future multi:softmax support
+  // without breaking the wire format.
+  repeated bytes encrypted_scores = 1;
 }

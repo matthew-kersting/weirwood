@@ -3,15 +3,32 @@
 //! Load a trained XGBoost model and evaluate it either in plaintext (for testing)
 //! or encrypted under FHE so the server learns nothing about the input.
 //!
-//! # Quickstart
+//! # Quickstart — plaintext
 //!
 //! ```no_run
-//! use weirwood::{model::WeirwoodTree, eval::{Evaluator, PlaintextEvaluator}};
+//! use weirwood::{model::WeirwoodTree, eval::PlaintextEvaluator};
 //!
-//! let weirwood_tree = WeirwoodTree::from_json_file("model.json")?;
-//! let features = vec![1.0_f32, 0.5, 3.2, 0.1];
-//! let score = PlaintextEvaluator.predict(&weirwood_tree, &features);
+//! // `from_file` dispatches by extension: `.ubj` → Universal Binary JSON,
+//! // anything else → JSON.
+//! let model = WeirwoodTree::from_file("model.ubj")?;
+//! let proba = PlaintextEvaluator.predict_proba(&model, &[1.0_f32, 0.5, 3.2, 0.1])?;
 //! # Ok::<(), weirwood::Error>(())
+//! ```
+//!
+//! # Quickstart — encrypted gRPC inference
+//!
+//! With the `transport` Cargo feature enabled. The server holds the XGBoost
+//! model and reports its shape during session setup, so the client never
+//! has to load the model file:
+//!
+//! ```no_run
+//! # #[cfg(feature = "transport")]
+//! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+//! use weirwood::transport::WeirwoodClient;
+//!
+//! let mut client = WeirwoodClient::connect("http://127.0.0.1:9999").await?;
+//! let proba = client.predict_proba(&[1.0_f32, 0.5, 3.2, 0.1]).await?;
+//! # Ok(()) }
 //! ```
 
 pub mod error;

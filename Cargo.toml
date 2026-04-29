@@ -1,6 +1,6 @@
 [package]
 name = "weirwood"
-version = "0.4.0"
+version = "1.0.0"
 edition = "2024"
 description = "Privacy-preserving XGBoost inference via Fully Homomorphic Encryption"
 license = "MIT"
@@ -9,7 +9,7 @@ documentation = "https://docs.rs/weirwood"
 keywords = ["fhe", "xgboost", "machine-learning", "cryptography", "privacy"]
 categories = ["cryptography", "science"]
 readme = "README.md"
-exclude = ["weirwood_1pager.md", "benchmarks/"]
+exclude = ["weirwood_1pager.md", "benchmarks/", "demo/"]
 
 [features]
 transport = ["dep:tonic", "dep:prost", "dep:tokio", "dep:tokio-stream"]

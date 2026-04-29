@@ -52,7 +52,7 @@ fn main() -> Result<(), weirwood::Error> {
         .nth(1)
         .unwrap_or_else(|| DEFAULT_MODEL.to_string());
 
-    let model = WeirwoodTree::from_json_file(&model_path)?;
+    let model = WeirwoodTree::from_file(&model_path)?;
 
     println!("weirwood · FHE stump inference");
     println!("  model : {model_path}");
@@ -82,16 +82,16 @@ fn main() -> Result<(), weirwood::Error> {
     // -----------------------------------------------------------------------
     // Server setup
     // -----------------------------------------------------------------------
-    // FheEvaluator::new installs the server key on its worker threads;
-    // predict() lazily installs it on the calling thread on first use.
-    let evaluator = FheEvaluator::new(server_ctx);
+    // try_new validates the model for FHE evaluation and installs the server
+    // key on worker threads. predict() lazily installs it on the calling thread.
+    let evaluator = FheEvaluator::try_new(&model, server_ctx)?;
 
     // -----------------------------------------------------------------------
     // For each test point: client encrypts → server evaluates → client decrypts
     // -----------------------------------------------------------------------
     println!(
-        "  {:<12}  {:<14}  {:<14}  {:<12}  {}",
-        "feature[0]", "plaintext", "FHE result", "FHE latency", "match?"
+        "  {:<12}  {:<14}  {:<14}  {:<12}  match?",
+        "feature[0]", "plaintext", "FHE result", "FHE latency"
     );
     println!("  {}", "-".repeat(70));
 
